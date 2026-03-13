@@ -1,0 +1,66 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.6.1 Chrome/142.0.7444.265 Electron/39.8.0 Safari/537.36" version="29.6.1">
+  <diagram name="第 1 页" id="oSf-NFY1_0VzADFvbCUX">
+    <mxGraphModel dx="734" dy="608" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-3" edge="1" parent="1" source="lST8lAJ3yKwZyQ7Kj8EI-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="lST8lAJ3yKwZyQ7Kj8EI-2" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-19" edge="1" parent="1" source="lST8lAJ3yKwZyQ7Kj8EI-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="lST8lAJ3yKwZyQ7Kj8EI-18">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-1" parent="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;" value="素材生成" vertex="1">
+          <mxGeometry height="80" width="80" x="231" y="224" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-5" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="lST8lAJ3yKwZyQ7Kj8EI-4" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="271" y="465" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-9" edge="1" parent="1" source="lST8lAJ3yKwZyQ7Kj8EI-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="lST8lAJ3yKwZyQ7Kj8EI-6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-10" edge="1" parent="1" source="lST8lAJ3yKwZyQ7Kj8EI-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="lST8lAJ3yKwZyQ7Kj8EI-8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-17" edge="1" parent="1" source="lST8lAJ3yKwZyQ7Kj8EI-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="lST8lAJ3yKwZyQ7Kj8EI-16">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-2" parent="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;" value="生视频" vertex="1">
+          <mxGeometry height="80" width="80" x="231" y="384" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-12" edge="1" parent="1" source="lST8lAJ3yKwZyQ7Kj8EI-4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="lST8lAJ3yKwZyQ7Kj8EI-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-4" parent="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;" value="canva&lt;div&gt;做模板&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="80" x="154" y="570" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-13" edge="1" parent="1" source="lST8lAJ3yKwZyQ7Kj8EI-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="lST8lAJ3yKwZyQ7Kj8EI-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-6" parent="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;" value="达芬奇" vertex="1">
+          <mxGeometry height="80" width="80" x="292" y="570" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-14" edge="1" parent="1" source="lST8lAJ3yKwZyQ7Kj8EI-8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="lST8lAJ3yKwZyQ7Kj8EI-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-8" parent="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;" value="其他工具" vertex="1">
+          <mxGeometry height="80" width="80" x="427" y="570" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-11" parent="1" style="whiteSpace=wrap;html=1;aspect=fixed;" value="软件读取md5值" vertex="1">
+          <mxGeometry height="80" width="80" x="292" y="749" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-16" parent="1" style="whiteSpace=wrap;html=1;aspect=fixed;" value="MD5" vertex="1">
+          <mxGeometry height="80" width="80" x="415" y="384" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-18" parent="1" style="whiteSpace=wrap;html=1;aspect=fixed;" value="MD5" vertex="1">
+          <mxGeometry height="80" width="80" x="415" y="224" as="geometry" />
+        </mxCell>
+        <mxCell id="lST8lAJ3yKwZyQ7Kj8EI-20" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;rounded=0;" value="&lt;h1 style=&quot;margin-top: 0px;&quot;&gt;canva模板&lt;/h1&gt;&lt;p&gt;每个模板命名都有一个唯一的编码&lt;/p&gt;&lt;p&gt;这个编码要录入数据库，就是这个编码使用了哪些素材，读取素材数据自动关联。&lt;/p&gt;&lt;p&gt;&lt;br&gt;&lt;/p&gt;&lt;p&gt;谁使用了这个模板，下载视频的时候，这个文件夹的名称，就有这个模板的名称里面包含的编号比如【HX2026031301】，然后就可以读取数据库里面的数据。&lt;/p&gt;&lt;p&gt;然后软件在这些文件夹生成素材的时候，就按照顺序 读取对应的素材数据，并关联目前的视频。存入数据库。&lt;/p&gt;&lt;p&gt;视频写入哈希值。并录入数据库，人员名称。&lt;/p&gt;" vertex="1">
+          <mxGeometry height="361" width="262" x="588" y="409" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

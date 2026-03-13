@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# 数据库配置（含密码，不提交）
+mam_db_config.json
+
+# 本地缓存/注册表
+mam_registry.json
+mam_config.json
+
+# 测试图片素材（本地数据）
+图片素材/
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.mov
+step*.png
+
+# exiftool 可执行文件（体积大，用户自行下载）
+exiftool.exe
+exiftool(-k).exe
+
+# 临时/备份文件
+*.bkp
+.$*.bkp
+
+# VS Code
+.vscode/
