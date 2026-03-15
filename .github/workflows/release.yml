@@ -1,0 +1,182 @@
+name: Secure Release (PyInstaller)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  id-token: write
+  contents: write
+  attestations: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Install exiftool on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install exiftool -y --no-progress
+          $cmd = Get-Command exiftool.exe -ErrorAction Stop
+          "EXIFTOOL_PATH=$($cmd.Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install exiftool on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install exiftool
+          echo "EXIFTOOL_PATH=$(command -v exiftool)" >> "$GITHUB_ENV"
+
+      - name: Build app on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name MAMDesktop `
+            --collect-all PyQt6 `
+            --collect-all cv2 `
+            --collect-all imagehash `
+            --hidden-import pymysql `
+            --hidden-import piexif `
+            --hidden-import mutagen.mp4 `
+            --add-binary "$env:EXIFTOOL_PATH;." `
+            mam_gui.py
+
+      - name: Build app on macOS
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name MAMDesktop \
+            --collect-all PyQt6 \
+            --collect-all cv2 \
+            --collect-all imagehash \
+            --hidden-import pymysql \
+            --hidden-import piexif \
+            --hidden-import mutagen.mp4 \
+            --add-binary "${EXIFTOOL_PATH}:." \
+            mam_gui.py
+
+      - name: Create Windows installer (.exe)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          New-Item -ItemType Directory -Force release | Out-Null
+          New-Item -ItemType Directory -Force packaging/windows | Out-Null
+
+          $iss = @(
+            '[Setup]',
+            'AppName=MAM Desktop',
+            'AppVersion={#MyAppVersion}',
+            'DefaultDirName={autopf}\MAMDesktop',
+            'DefaultGroupName=MAM Desktop',
+            'OutputDir=release',
+            'OutputBaseFilename=MAMDesktop-Installer-{#MyAppVersion}-win64',
+            'Compression=lzma',
+            'SolidCompression=yes',
+            'ArchitecturesAllowed=x64compatible',
+            'ArchitecturesInstallIn64BitMode=x64compatible',
+            'WizardStyle=modern',
+            '',
+            '[Tasks]',
+            'Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons"',
+            '',
+            '[Files]',
+            'Source: "dist\MAMDesktop\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs',
+            'Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion',
+            'Source: "QUICK_START.md"; DestDir: "{app}"; Flags: ignoreversion',
+            'Source: "API_REFERENCE.md"; DestDir: "{app}"; Flags: ignoreversion',
+            'Source: "CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion',
+            '',
+            '[Icons]',
+            'Name: "{autoprograms}\MAM Desktop"; Filename: "{app}\MAMDesktop.exe"',
+            'Name: "{autodesktop}\MAM Desktop"; Filename: "{app}\MAMDesktop.exe"; Tasks: desktopicon',
+            '',
+            '[Run]',
+            'Filename: "{app}\MAMDesktop.exe"; Description: "Launch MAM Desktop"; Flags: nowait postinstall skipifsilent'
+          )
+          $iss | Set-Content -Path packaging/windows/mam_installer.iss -Encoding UTF8
+
+          $version = '${{ steps.meta.outputs.version }}'
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" "packaging/windows/mam_installer.iss"
+
+      - name: Create macOS installer (.pkg/.dmg)
+        if: runner.os == 'macOS'
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          rm -rf pkgroot release
+          mkdir -p pkgroot/Applications release
+          cp -R dist/MAMDesktop.app pkgroot/Applications/
+
+          pkgbuild \
+            --root pkgroot \
+            --identifier com.nuosishizi.mamdesktop \
+            --version "$VERSION" \
+            --install-location "/" \
+            "release/MAMDesktop-Installer-${VERSION}-macos.pkg"
+
+          mkdir -p dmgroot
+          cp -R dist/MAMDesktop.app dmgroot/
+          ln -s /Applications dmgroot/Applications
+          hdiutil create -volname "MAM Desktop" -srcfolder dmgroot -ov -format UDZO "release/MAMDesktop-${VERSION}-macos.dmg"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "release/*"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ runner.os }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
