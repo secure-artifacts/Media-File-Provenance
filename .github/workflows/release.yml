@@ -72,6 +72,16 @@ jobs:
             --hidden-import mutagen.mp4 `
             --add-binary "$env:EXIFTOOL_PATH;." `
             mam_gui.py
+          
+          Write-Host "Checking PyInstaller output..."
+          if (Test-Path "dist\MAMDesktop") {
+            Write-Host "✓ dist\MAMDesktop exists"
+            Get-ChildItem -Path "dist\MAMDesktop" -Recurse | Measure-Object | ForEach-Object { Write-Host "  Files count: $($_.Count)" }
+          } else {
+            Write-Host "✗ ERROR: dist\MAMDesktop not found!"
+            Get-ChildItem -Path "dist" -ErrorAction Ignore | ForEach-Object { Write-Host "  Found: $_" }
+            exit 1
+          }
 
       - name: Build app on macOS
         if: runner.os == 'macOS'
@@ -85,6 +95,16 @@ jobs:
             --hidden-import mutagen.mp4 \
             --add-binary "${EXIFTOOL_PATH}:." \
             mam_gui.py
+          
+          echo "Checking PyInstaller output..."
+          if [ -d "dist/MAMDesktop.app" ]; then
+            echo "✓ dist/MAMDesktop.app exists"
+            find dist/MAMDesktop.app | wc -l | xargs echo "  Files count:"
+          else
+            echo "✗ ERROR: dist/MAMDesktop.app not found!"
+            ls -la dist/ || true
+            exit 1
+          fi
 
       - name: Create Windows installer (.exe)
         if: runner.os == 'Windows'
@@ -93,6 +113,16 @@ jobs:
           choco install innosetup -y --no-progress
           New-Item -ItemType Directory -Force release | Out-Null
           New-Item -ItemType Directory -Force packaging/windows | Out-Null
+          
+          # Verify dist\MAMDesktop exists before compilation
+          if (-not (Test-Path "dist\MAMDesktop")) {
+            Write-Host "ERROR: dist\MAMDesktop not found!"
+            Write-Host "Current directory:"
+            Get-Location
+            Write-Host "Directory listing:"
+            Get-ChildItem -Path "dist" -ErrorAction Ignore | ForEach-Object { Write-Host "  $_" }
+            exit 1
+          }
 
           $iss = @(
             '[Setup]',
