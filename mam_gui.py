@@ -5,7 +5,6 @@ import os
 import re
 import json
 import cv2
-import threading
 import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime
@@ -2229,55 +2228,57 @@ class MamApp(QMainWindow):
         save_config(self._cfg)
 
         def task():
-            results = []
+            # 阶段1：并发计算“文件内容哈希”（不再依赖文件名猜测）
+            hashed_rows = []
 
-            db_lock = threading.Lock()
-            thread_dbs = {}
-
-            def get_thread_db():
-                tid = threading.get_ident()
-                with db_lock:
-                    existing = thread_dbs.get(tid)
-                    if existing:
-                        return existing
-                    worker_db = DBManager()
-                    worker_db.conf = dict(db.conf)
-                    ok, msg = worker_db.connect()
-                    if not ok:
-                        raise RuntimeError(msg)
-                    thread_dbs[tid] = worker_db
-                    return worker_db
-
-            def process_one(fp):
+            def calc_hash(fp):
                 img = get_thumbnail(fp)
-                ph, _ = get_phash_from_file(fp, img)
-                lineage = None
-                if ph:
-                    ldb = get_thread_db()
-                    lineage = ldb.get_lineage(ph, exact_only=not enable_fuzzy)
-                    if not lineage and enable_fuzzy:
-                        lineage = ldb.get_lineage(ph, exact_only=False)
-                return {'fp': fp, 'img': img, 'lineage': lineage}
+                ph = get_phash(img) if img is not None else None
+                return {'fp': fp, 'img': img, 'phash': ph}
 
-            try:
-                with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                    future_map = {executor.submit(process_one, fp): fp for fp in fps}
-                    total = len(future_map)
-                    done_count = 0
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_map = {executor.submit(calc_hash, fp): fp for fp in fps}
+                total = len(future_map)
+                done_count = 0
+                for future in as_completed(future_map):
+                    fp = future_map[future]
+                    done_count += 1
+                    try:
+                        row = future.result()
+                    except Exception as e:
+                        gui_log(f"❌ 哈希计算失败 {os.path.basename(fp)}: {e}")
+                        row = {'fp': fp, 'img': None, 'phash': None}
+                    if not row.get('phash'):
+                        gui_log(f"⚠️ 无法计算哈希: {os.path.basename(fp)}")
+                    hashed_rows.append(row)
+                    self.report_progress(int(done_count / max(total, 1) * 40))
 
-                    for future in as_completed(future_map):
-                        fp = future_map[future]
-                        done_count += 1
-                        try:
-                            res = future.result()
-                        except Exception as e:
-                            gui_log(f"❌ {os.path.basename(fp)}: {e}")
-                            res = {'fp': fp, 'img': None, 'lineage': None}
-                        results.append(res)
-                        self.report_progress(int(done_count / total * 100))
-            finally:
-                for worker_db in thread_dbs.values():
-                    worker_db.close()
+            # 阶段2：SQL 批量溯源查询
+            ph_list = [r['phash'] for r in hashed_rows if r.get('phash')]
+            lineage_map = {}
+            if ph_list:
+                query_db = DBManager()
+                query_db.conf = dict(db.conf)
+                ok, msg = query_db.connect()
+                if not ok:
+                    raise RuntimeError(msg)
+                try:
+                    lineage_map = query_db.get_lineage_batch(
+                        ph_list,
+                        exact_only=not enable_fuzzy,
+                        workers=worker_count,
+                    )
+                finally:
+                    query_db.close()
+
+            # 阶段3：组装返回
+            results = []
+            total = max(1, len(hashed_rows))
+            for i, row in enumerate(hashed_rows):
+                ph = row.get('phash')
+                lineage = lineage_map.get(ph) if ph else None
+                results.append({'fp': row['fp'], 'img': row['img'], 'lineage': lineage})
+                self.report_progress(40 + int((i + 1) / total * 60))
 
             return results
 

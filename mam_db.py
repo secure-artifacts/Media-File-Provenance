@@ -2,6 +2,8 @@
 # 列名使用 metadata_json 兼容旧表；关系表不使用外键，避免 charset 不兼容
 import os
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 DB_CONFIG_FILE = "mam_db_config.json"
@@ -339,6 +341,30 @@ class DBManager:
             return best
         return None
 
+    def get_assets_by_phashes(self, phashes):
+        """按 phash 列表批量读取资产基础信息，返回 {phash: row}。"""
+        if not self.conn:
+            return {}
+        clean = [p for p in (phashes or []) if p]
+        if not clean:
+            return {}
+        uniq = list(dict.fromkeys(clean))
+        placeholders = ",".join(["%s"] * len(uniq))
+        sql = (
+            "SELECT phash, filename, asset_type, file_size, producer, "
+            "created_at, metadata_json FROM assets "
+            f"WHERE phash IN ({placeholders})"
+        )
+        with self.conn.cursor() as cur:
+            cur.execute(sql, tuple(uniq))
+            rows = cur.fetchall()
+        out = {}
+        for r in rows:
+            r['distance'] = 0
+            r['similarity'] = "100%"
+            out[r['phash']] = r
+        return out
+
     # ── 递归溯源链（优化：避免 visited.copy() 副本）──────────────────────────────────────
     def _get_derive_chain_up(self, phash, visited=None, depth=0, max_depth=8):
         """递归向上：此 phash 是从哪些素材衍生而来（返回带 ancestors 键的行列表）"""
@@ -431,25 +457,18 @@ class DBManager:
             assets.append(asset)
         return assets
 
-    def get_lineage(self, phash, exact_only=False):
-        """返回完整溯源树 dict（含多级递归衍生链 + Canva 模板引用）"""
+    def _fetch_canva_templates(self):
         if not self.conn:
-            return None
-        if exact_only:
-            with self.conn.cursor() as cur:
-                cur.execute(
-                    "SELECT phash, filename, asset_type, file_size, producer, "
-                    "created_at, metadata_json FROM assets WHERE phash = %s",
-                    (phash,)
-                )
-                base = cur.fetchone()
-            if base:
-                base['distance'] = 0
-                base['similarity'] = "100%"
-        else:
-            base = self.lookup(phash)
-        if not base:
-            return None
+            return []
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT template_id, template_name, creator, created_at, asset_phashes "
+                "FROM canva_templates"
+            )
+            return list(cur.fetchall())
+
+    def _build_lineage_from_base(self, base, canva_templates=None):
+        """基于已命中的基础资产构建完整溯源，避免重复 base 查询。"""
         exact = base['phash']
         result = {
             "asset":        base,
@@ -501,34 +520,119 @@ class DBManager:
             """, (exact,))
             result["used_in"] = list(cur.fetchall())
 
-            # ── 出现在哪些 Canva 模板 ─────────────────────
-            cur.execute(
-                "SELECT template_id, template_name, creator, created_at, asset_phashes "
-                "FROM canva_templates"
-            )
-            for tmpl in cur.fetchall():
-                try:
-                    phashes = json.loads(tmpl['asset_phashes']) if tmpl['asset_phashes'] else []
-                except:
-                    phashes = []
-                phash_set = set(phashes)
-                if exact in phash_set:
-                    mode = 'direct'
-                    matched = [exact]
-                else:
-                    mode = 'upstream'
-                    matched = [ph for ph in phashes if ph in canva_scope]
+        tmpls = canva_templates if canva_templates is not None else self._fetch_canva_templates()
+        for tmpl in tmpls:
+            try:
+                phashes = json.loads(tmpl['asset_phashes']) if tmpl['asset_phashes'] else []
+            except:
+                phashes = []
+            phash_set = set(phashes)
+            if exact in phash_set:
+                mode = 'direct'
+                matched = [exact]
+            else:
+                mode = 'upstream'
+                matched = [ph for ph in phashes if ph in canva_scope]
 
-                if not matched:
-                    continue
+            if not matched:
+                continue
 
-                t = dict(tmpl)
-                t['match_mode'] = mode
-                t['matched_phashes'] = matched
-                t['matched_count'] = len(matched)
-                t['assets'] = self._build_canva_assets_lineage(phashes)
-                result["canva_used"].append(t)
+            t = dict(tmpl)
+            t['match_mode'] = mode
+            t['matched_phashes'] = matched
+            t['matched_count'] = len(matched)
+            t['assets'] = self._build_canva_assets_lineage(phashes)
+            result["canva_used"].append(t)
         return result
+
+    def get_lineage(self, phash, exact_only=False):
+        """返回完整溯源树 dict（含多级递归衍生链 + Canva 模板引用）"""
+        if not self.conn:
+            return None
+        if exact_only:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT phash, filename, asset_type, file_size, producer, "
+                    "created_at, metadata_json FROM assets WHERE phash = %s",
+                    (phash,)
+                )
+                base = cur.fetchone()
+            if base:
+                base['distance'] = 0
+                base['similarity'] = "100%"
+        else:
+            base = self.lookup(phash)
+        if not base:
+            return None
+        return self._build_lineage_from_base(base)
+
+    def get_lineage_batch(self, phashes, exact_only=True, workers=4):
+        """批量溯源：先 SQL 批量取 base，再并发构建 lineage。"""
+        if not self.conn:
+            return {}
+
+        ordered = [p for p in (phashes or []) if p]
+        if not ordered:
+            return {}
+        uniq = list(dict.fromkeys(ordered))
+
+        base_map = self.get_assets_by_phashes(uniq)
+        if not exact_only:
+            for ph in uniq:
+                if ph not in base_map:
+                    b = self.lookup(ph)
+                    if b:
+                        base_map[ph] = b
+
+        canva_templates = self._fetch_canva_templates()
+        if workers <= 1 or len(uniq) <= 1:
+            out = {}
+            for ph in uniq:
+                base = base_map.get(ph)
+                out[ph] = self._build_lineage_from_base(dict(base), canva_templates) if base else None
+            return out
+
+        lock = threading.Lock()
+        thread_dbs = {}
+
+        def get_thread_db():
+            tid = threading.get_ident()
+            with lock:
+                existing = thread_dbs.get(tid)
+                if existing:
+                    return existing
+                wdb = DBManager()
+                wdb.conf = dict(self.conf)
+                ok, msg = wdb.connect()
+                if not ok:
+                    raise RuntimeError(msg)
+                thread_dbs[tid] = wdb
+                return wdb
+
+        def process_one(ph):
+            base = base_map.get(ph)
+            if not base:
+                return ph, None
+            wdb = get_thread_db()
+            return ph, wdb._build_lineage_from_base(dict(base), canva_templates)
+
+        out = {ph: None for ph in uniq}
+        try:
+            with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
+                fut_map = {ex.submit(process_one, ph): ph for ph in uniq}
+                for fut in as_completed(fut_map):
+                    ph = fut_map[fut]
+                    try:
+                        key, value = fut.result()
+                        out[key] = value
+                    except:
+                        out[ph] = None
+        finally:
+            with lock:
+                for wdb in thread_dbs.values():
+                    wdb.close()
+
+        return out
 
     def get_lineage_by_canva_id(self, template_id):
         """通过 Canva 模板ID 查询使用的所有素材及其完整溯源链"""
