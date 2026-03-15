@@ -135,7 +135,7 @@ jobs:
             'AppVersion={#MyAppVersion}',
             'DefaultDirName={autopf}\MAMDesktop',
             'DefaultGroupName=MAM Desktop',
-            'OutputDir=release',
+            'OutputDir=..\..\release',
             'OutputBaseFilename=MAMDesktop-Installer-{#MyAppVersion}-win64',
             'Compression=lzma',
             'SolidCompression=yes',
