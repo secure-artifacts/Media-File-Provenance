@@ -165,9 +165,9 @@ class DropArea(QFrame):
             name = os.path.basename(fp)
             short_name = name if len(name) <= 14 else f"{name[:13]}…"
             nm = QLabel(short_name)
-            nm.setStyleSheet("font-size:10px;color:#4f5f70;")
+            nm.setStyleSheet("font-size:12px;color:#4f5f70;")
             nm.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            nm.setFixedWidth(108)
+            nm.setFixedWidth(116)
             bv.addWidget(lbl); bv.addWidget(nm); self._pv.addWidget(box)
 
     def clear(self):
@@ -419,7 +419,7 @@ class MamApp(QMainWindow):
 
         # ── 左侧导航区
         nav = QFrame(); nav.setObjectName("navPane")
-        nav.setMinimumWidth(230); nav.setMaximumWidth(260)
+        nav.setMinimumWidth(238); nav.setMaximumWidth(300)
         nav_l = QVBoxLayout(nav)
         nav_l.setContentsMargins(18, 18, 18, 18)
         nav_l.setSpacing(10)
@@ -499,7 +499,7 @@ class MamApp(QMainWindow):
         log_title = QLabel("运行日志")
         log_title.setObjectName("logTitle")
         self._log_box = TextEdit(); self._log_box.setReadOnly(True)
-        self._log_box.setMaximumHeight(120)
+        self._log_box.setMaximumHeight(150)
         self._log_box.setObjectName("logbox")
         log_l.addWidget(log_title)
         log_l.addWidget(self._log_box)
@@ -565,7 +565,7 @@ class MamApp(QMainWindow):
         btn.setStyleSheet("background:#2980b9;color:#fff;height:42px;font-size:14px;border:none;border-radius:9px;")
         btn.clicked.connect(self._do_register)
         btn_clr = PushButton("🗑  清空素材")
-        btn_clr.setFixedWidth(150)
+        btn_clr.setMinimumWidth(160)
         btn_clr.setStyleSheet(
             "background:#eef3f8;color:#2f4a67;height:42px;font-size:14px;"
             "border:1px solid #d4e0ec;border-radius:9px;")
@@ -591,7 +591,7 @@ class MamApp(QMainWindow):
         v.addLayout(dr0)
         self._lbl_rel_type = QLabel("关系类型：拖入两侧文件后自动识别")
         self._lbl_rel_type.setStyleSheet(
-            "color:#6e6e73;font-size:11px;padding:2px 0;")
+            "color:#6e6e73;font-size:12px;padding:2px 0;")
         self._drop_src.filesChanged.connect(self._update_rel_type_label)
         self._drop_dst.filesChanged.connect(self._update_rel_type_label)
         v.addWidget(self._lbl_rel_type)
@@ -602,7 +602,7 @@ class MamApp(QMainWindow):
             "height:42px;font-size:14px;font-weight:600;")
         btn0.clicked.connect(self._do_derive)
         btn0_clr = PushButton("🗑  清空两侧")
-        btn0_clr.setFixedWidth(150)
+        btn0_clr.setMinimumWidth(160)
         btn0_clr.setStyleSheet(
             "background:#eef3f8;color:#2f4a67;height:42px;font-size:14px;"
             "border:1px solid #d4e0ec;border-radius:9px;")
@@ -633,7 +633,7 @@ class MamApp(QMainWindow):
             "height:42px;font-size:14px;font-weight:600;")
         btn1.clicked.connect(self._do_compose)
         btn1_clr = PushButton("🗑  清空两侧")
-        btn1_clr.setFixedWidth(150)
+        btn1_clr.setMinimumWidth(160)
         btn1_clr.setStyleSheet(
             "background:#eef3f8;color:#2f4a67;height:42px;font-size:14px;"
             "border:1px solid #d4e0ec;border-radius:9px;")
@@ -665,12 +665,12 @@ class MamApp(QMainWindow):
             self._lbl_rel_type.setText(
                 f"✅ 自动检测：{labels.get(rel, rel)}")
             self._lbl_rel_type.setStyleSheet(
-                "color:#007aff;font-size:11px;"
+                "color:#007aff;font-size:12px;"
                 "font-weight:bold;padding:2px 0;")
         else:
             self._lbl_rel_type.setText("关系类型：拖入两侧文件后自动识别")
             self._lbl_rel_type.setStyleSheet(
-                "color:#6e6e73;font-size:11px;padding:2px 0;")
+                "color:#6e6e73;font-size:12px;padding:2px 0;")
 
     def _detect_rel_type(self, src_fp: str, dst_fp: str) -> str:
         """根据来源与衍生素材的文件类型自动确定关系类型"""
@@ -696,7 +696,7 @@ class MamApp(QMainWindow):
             "border:none;border-radius:9px;")
         btn.clicked.connect(self._do_canva)
         btn_clr = PushButton("🗑  清空输入")
-        btn_clr.setFixedWidth(150)
+        btn_clr.setMinimumWidth(160)
         btn_clr.setStyleSheet(
             "background:#eef3f8;color:#2f4a67;height:42px;font-size:14px;"
             "border:1px solid #d4e0ec;border-radius:9px;")
@@ -712,7 +712,7 @@ class MamApp(QMainWindow):
         )
         self._canva_id_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._btn_copy_canva = PushButton("\U0001f4cb 复制ID")
-        self._btn_copy_canva.setFixedWidth(90)
+        self._btn_copy_canva.setMinimumWidth(108)
         self._btn_copy_canva.setEnabled(False)
         self._btn_copy_canva.clicked.connect(self._copy_canva_id)
         id_row.addWidget(self._canva_id_lbl, 1); id_row.addWidget(self._btn_copy_canva)
@@ -756,7 +756,7 @@ class MamApp(QMainWindow):
         btn.clicked.connect(self._do_compose_batch)
 
         btn_clr = PushButton("🗑  清空批量目录")
-        btn_clr.setFixedWidth(150)
+        btn_clr.setMinimumWidth(160)
         btn_clr.setStyleSheet(
             "background:#eef3f8;color:#2f4a67;height:42px;font-size:14px;"
             "border:1px solid #d4e0ec;border-radius:8px;"
@@ -862,7 +862,7 @@ class MamApp(QMainWindow):
         btn.clicked.connect(self._do_canva_batch)
 
         btn_clr = PushButton("🗑  清空批量目录")
-        btn_clr.setFixedWidth(150)
+        btn_clr.setMinimumWidth(160)
         btn_clr.setStyleSheet(
             "background:#eef3f8;color:#2f4a67;height:42px;font-size:14px;"
             "border:1px solid #d4e0ec;border-radius:8px;"
@@ -903,7 +903,7 @@ class MamApp(QMainWindow):
             "border:none;border-radius:9px;")
         btn.clicked.connect(self._do_query)
         btn_clr = PushButton("🗑  清空输入")
-        btn_clr.setFixedWidth(150)
+        btn_clr.setMinimumWidth(160)
         btn_clr.setStyleSheet(
             "background:#eef3f8;color:#2f4a67;height:42px;font-size:14px;"
             "border:1px solid #d4e0ec;border-radius:9px;")
@@ -919,7 +919,7 @@ class MamApp(QMainWindow):
         self._canva_id_search = LineEdit()
         self._canva_id_search.setPlaceholderText("输入Canva模板ID…")
         btn_cv = PushButton("查模板")
-        btn_cv.setFixedWidth(78)
+        btn_cv.setMinimumWidth(90)
         btn_cv.setStyleSheet(
             "background:#e9eef5;color:#2f4a67;height:38px;font-size:13px;"
             "border:1px solid #d4e0ec;border-radius:8px;")
@@ -1720,7 +1720,7 @@ class MamApp(QMainWindow):
         row_lay.setContentsMargins(14, 14, 14, 14); row_lay.setSpacing(16)
 
         # ── 左栏：缩略图 + 文件名 + 制作人 ──────────────────────
-        left = QWidget(); left.setFixedWidth(124)
+        left = QWidget(); left.setMinimumWidth(152); left.setMaximumWidth(190)
         lv = QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(5)
         lv.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -1742,23 +1742,24 @@ class MamApp(QMainWindow):
         lv.addWidget(lbl_th)
 
         lbl_fn = QLabel(os.path.basename(fp))
-        lbl_fn.setWordWrap(True); lbl_fn.setMaximumWidth(120)
-        lbl_fn.setStyleSheet("font-weight:700;font-size:11px;color:#1f3348;margin-top:3px;")
+        lbl_fn.setWordWrap(True); lbl_fn.setMaximumWidth(180)
+        lbl_fn.setStyleSheet("font-weight:700;font-size:12px;color:#1f3348;margin-top:3px;")
         lv.addWidget(lbl_fn)
 
         if lineage:
             ast_d = lineage['asset']
             lbl_prod = QLabel(f"👤 {ast_d.get('producer','?')}")
-            lbl_prod.setStyleSheet("font-size:10px;color:#6a7f96;")
+            lbl_prod.setWordWrap(True)
+            lbl_prod.setStyleSheet("font-size:12px;color:#6a7f96;")
             lv.addWidget(lbl_prod)
             lbl_type = QLabel(ast_d.get('asset_type', ''))
-            lbl_type.setStyleSheet("font-size:10px;color:#9ba8b4;")
+            lbl_type.setStyleSheet("font-size:11px;color:#9ba8b4;")
             lv.addWidget(lbl_type)
 
         if merged_count > 1:
             lbl_dup = QLabel(f"合并 {merged_count} 项")
             lbl_dup.setStyleSheet(
-                "font-size:10px;color:#375a7a;background:#ecf4fc;"
+                "font-size:11px;color:#375a7a;background:#ecf4fc;"
                 "border:1px solid #cfe0f0;border-radius:8px;padding:2px 5px;")
             lv.addWidget(lbl_dup)
 
@@ -1783,13 +1784,13 @@ class MamApp(QMainWindow):
         else:
             lbl_chain = QLabel("❓ 该文件未在数据库登记")
             lbl_chain.setStyleSheet("font-size:13px;color:#c24a2f;")
-        top_row.addWidget(lbl_chain)
-        top_row.addStretch()
+        lbl_chain.setWordWrap(True)
+        top_row.addWidget(lbl_chain, 1)
 
         btn_cp = PushButton("复制")
-        btn_cp.setFixedWidth(48); btn_cp.setFixedHeight(24)
+        btn_cp.setMinimumWidth(64); btn_cp.setMinimumHeight(28)
         btn_cp.setStyleSheet(
-            "font-size:11px;background:#f0f4f8;border:1px solid #c8d8e8;"
+            "font-size:12px;background:#f0f4f8;border:1px solid #c8d8e8;"
             "border-radius:6px;color:#3c5a78;padding:0;")
         btn_cp.clicked.connect(lambda _, f=fp, lg=lineage: self._copy_lineage_row(f, lg))
         top_row.addWidget(btn_cp)
@@ -1799,12 +1800,12 @@ class MamApp(QMainWindow):
             tree = QTreeWidget()
             tree.setColumnCount(2)
             tree.setHeaderHidden(True)
-            tree.setColumnWidth(0, 380); tree.setColumnWidth(1, 90)
+            tree.setColumnWidth(0, 520); tree.setColumnWidth(1, 140)
             tree.setAlternatingRowColors(False)
-            tree.setMinimumHeight(60)
+            tree.setMinimumHeight(80)
             tree.setStyleSheet(
                 "QTreeWidget{border:1px solid #e0e8f0;border-radius:8px;background:#fafcff;}"
-                "QTreeWidget::item{height:26px;font-size:12px;padding-left:2px;}"
+                "QTreeWidget::item{height:30px;font-size:13px;padding-left:2px;}"
                 "QTreeWidget::branch{background:#fafcff;}")
             self._fill_lineage_tree(tree, lineage)
             rv.addWidget(tree)
@@ -2178,27 +2179,28 @@ class MamApp(QMainWindow):
             hdr = QHBoxLayout()
             lbl = QLabel(f"🎨 {tname}  【{tid_val}】  👤{tcreator}")
             lbl.setStyleSheet("font-weight:700;font-size:15px;color:#27435f;")
-            hdr.addWidget(lbl); hdr.addStretch()
+            lbl.setWordWrap(True)
+            hdr.addWidget(lbl, 1)
             def _make_copy_fn(t):
                 def fn():
                     QApplication.clipboard().setText(f"【{t}】")
                     self._log(f"✅ 已复制: 【{t}】")
                 return fn
             btn_cp = PushButton("📋 复制模板ID")
-            btn_cp.setFixedWidth(112); btn_cp.setFixedHeight(30)
+            btn_cp.setMinimumWidth(126); btn_cp.setMinimumHeight(32)
             btn_cp.setStyleSheet("font-size:12px;background:#eef4fa;border:1px solid #d2dfec;border-radius:8px;")
             btn_cp.clicked.connect(_make_copy_fn(tid_val))
             hdr.addWidget(btn_cp); cv2_lay.addLayout(hdr)
             tree = QTreeWidget()
             tree.setColumnCount(4)
             tree.setHeaderHidden(True)
-            tree.setColumnWidth(0, 420); tree.setColumnWidth(1, 110)
-            tree.setColumnWidth(2, 170); tree.setColumnWidth(3, 86)
+            tree.setColumnWidth(0, 520); tree.setColumnWidth(1, 130)
+            tree.setColumnWidth(2, 200); tree.setColumnWidth(3, 96)
             tree.setAlternatingRowColors(False)
             tree.setStyleSheet(
                 "QTreeWidget{border:1px solid #dde6ef;border-radius:8px;background:#fbfdff;}"
-                "QTreeWidget::item{height:28px;font-size:12px;}")
-            tree.setMinimumHeight(100); tree.setMaximumHeight(360)
+                "QTreeWidget::item{height:30px;font-size:13px;}")
+            tree.setMinimumHeight(120); tree.setMaximumHeight(420)
             for asset in result['assets']:
                 fname_a  = asset.get('filename', '?')
                 prod_a   = asset.get('producer', '?')
@@ -2282,7 +2284,7 @@ class MamApp(QMainWindow):
         self._code_table.setHorizontalHeaderLabels(["CODE", "真实姓名", "操作"])
         self._code_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._code_table.setColumnWidth(0, 110)
-        self._code_table.setColumnWidth(2, 52)
+        self._code_table.setColumnWidth(2, 72)
         self._code_table.verticalHeader().setVisible(False)
         self._code_table.setMinimumHeight(110)
         self._code_table.setMaximumHeight(230)
@@ -2294,20 +2296,20 @@ class MamApp(QMainWindow):
         # 添加行
         add_row = QHBoxLayout()
         self._code_input = LineEdit(); self._code_input.setPlaceholderText("CODE（如 KS、57）")
-        self._code_input.setFixedWidth(100)
+        self._code_input.setMinimumWidth(120)
         self._name_input = LineEdit(); self._name_input.setPlaceholderText("真实姓名（如 张三）")
-        self._name_input.setFixedWidth(150)
+        self._name_input.setMinimumWidth(180)
         btn_add_code = PushButton("➕ 添加")
-        btn_add_code.setFixedWidth(70)
+        btn_add_code.setMinimumWidth(82)
         btn_add_code.clicked.connect(self._add_producer_code)
         btn_batch = PushButton("📋 批量粘贴")
-        btn_batch.setFixedWidth(90)
+        btn_batch.setMinimumWidth(102)
         btn_batch.setStyleSheet(
             "background:#8e44ad;color:#fff;height:30px;border:none;"
             "border-radius:5px;font-size:12px;")
         btn_batch.clicked.connect(self._batch_paste_codes)
         btn_save_codes = PushButton("💾 保存")
-        btn_save_codes.setFixedWidth(70)
+        btn_save_codes.setMinimumWidth(82)
         btn_save_codes.clicked.connect(self._save_producer_codes)
         add_row.addWidget(QLabel("CODE:"))
         add_row.addWidget(self._code_input)
@@ -2335,7 +2337,7 @@ class MamApp(QMainWindow):
         self._scan_path = LineEdit()
         self._scan_path.setPlaceholderText("粘贴路径，或点击右侧选择…")
         fr.addWidget(self._scan_path)
-        btn_br = PushButton("📂 选择"); btn_br.setFixedWidth(80)
+        btn_br = PushButton("📂 选择"); btn_br.setMinimumWidth(92)
         btn_br.clicked.connect(self._browse_scan_folder)
         fr.addWidget(btn_br); v.addLayout(fr)
 
@@ -2370,7 +2372,7 @@ class MamApp(QMainWindow):
         # 扫描日志（独立于主日志）
         self._scan_log = TextEdit(); self._scan_log.setReadOnly(True)
         self._scan_log.setStyleSheet(
-            "background:#0d1117;color:#58a6ff;font-size:11px;font-family:Consolas,monospace;")
+            "background:#0d1117;color:#58a6ff;font-size:12px;font-family:Consolas,monospace;")
         v.addWidget(self._scan_log)
         return w
 
@@ -2396,8 +2398,13 @@ class MamApp(QMainWindow):
         self._code_table.insertRow(idx)
         self._code_table.setItem(idx, 0, QTableWidgetItem(code))
         self._code_table.setItem(idx, 1, QTableWidgetItem(name))
-        btn_del = PushButton("🗑")
-        btn_del.setFixedWidth(32)
+        # 使用纯文本避免部分系统缺少 emoji 字体导致按钮显示为方块
+        btn_del = PushButton("删除")
+        btn_del.setMinimumWidth(58)
+        btn_del.setStyleSheet(
+            "background:#fdf2f2;color:#b42318;border:1px solid #f5c2c7;"
+            "border-radius:6px;font-size:12px;padding:0 6px;")
+        btn_del.setToolTip("删除此条人员代码")
         btn_del.clicked.connect(lambda _, r=idx: self._del_code_row(r))
         self._code_table.setCellWidget(idx, 2, btn_del)
         self._code_table.blockSignals(False)
@@ -2708,7 +2715,7 @@ QLabel#brandTitle {
     color: #102235;
 }
 QLabel#brandSub {
-    font-size: 11px;
+    font-size: 12px;
     color: #5f7388;
 }
 QLabel#userBadge {
@@ -2727,7 +2734,7 @@ QPushButton#navButton {
     color: #31475e;
     background: transparent;
     font-size: 13px;
-    min-height: 34px;
+    min-height: 36px;
 }
 QPushButton#navButton:hover {
     background: #dce8f5;
@@ -2758,7 +2765,7 @@ QLabel#pageTitle {
     color: #0f263d;
 }
 QLabel#pageHint {
-    font-size: 12px;
+    font-size: 13px;
     color: #64788c;
 }
 QLabel#logTitle {
@@ -2773,7 +2780,7 @@ QPushButton {
     padding: 5px 14px;
     color: #213447;
     font-size: 13px;
-    min-height: 28px;
+    min-height: 30px;
 }
 QPushButton:hover {
     background: #e5eef7;
@@ -2788,7 +2795,7 @@ QLineEdit, QTextEdit, QComboBox {
     padding: 5px 10px;
     font-size: 13px;
     selection-background-color: #1c8fff;
-    min-height: 28px;
+    min-height: 30px;
 }
 QLineEdit:focus, QTextEdit:focus {
     border-color: #1c8fff;
@@ -2810,7 +2817,7 @@ QHeaderView::section {
     border: none;
     border-bottom: 1px solid #dce6f0;
     padding: 5px 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: #5c7086;
     font-weight: 600;
 }
@@ -2837,14 +2844,14 @@ QScrollBar::handle:horizontal {
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 QProgressBar {
     background: #dce6f0;
-    border: none;
-    border-radius: 4px;
-    max-height: 6px;
+    border: 1px solid #c8d5e3;
+    border-radius: 6px;
+    min-height: 18px;
     text-align: center;
 }
 QProgressBar::chunk {
     background: #1c8fff;
-    border-radius: 4px;
+    border-radius: 5px;
 }
 QTextEdit#logbox {
     background: #0f1724;
@@ -2852,7 +2859,7 @@ QTextEdit#logbox {
     border: 1px solid #223a56;
     border-radius: 10px;
     font-family: Consolas, Menlo, monospace;
-    font-size: 11px;
+    font-size: 12px;
 }
 QFrame[frameShape="4"], QFrame[frameShape="5"] {
     color: #dce6f0;
