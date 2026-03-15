@@ -47,11 +47,43 @@ except ImportError:
 # exiftool 动态检测（每次调用，放入即生效）
 # ─────────────────────────────────────────────────────
 def _find_exiftool() -> str | None:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    for name in ("exiftool.exe", "exiftool(-k).exe", "exiftool"):
-        p = os.path.join(base_dir, name)
-        if os.path.isfile(p):
-            return p
+    search_dirs = []
+
+    # 1) 模块目录（开发态）
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    search_dirs.append(module_dir)
+
+    # 2) 模块上级目录（PyInstaller onedir 常见：_internal 的上一层）
+    search_dirs.append(os.path.dirname(module_dir))
+
+    # 3) 可执行文件目录（安装后最常见）
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    search_dirs.append(exe_dir)
+
+    # 4) PyInstaller 运行时目录
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        search_dirs.append(meipass)
+
+    # 5) macOS .app 常见目录
+    if sys.platform == 'darwin':
+        search_dirs.append(os.path.abspath(os.path.join(exe_dir, '..', 'MacOS')))
+        search_dirs.append(os.path.abspath(os.path.join(exe_dir, '..', 'Resources')))
+
+    # 去重且保持顺序
+    uniq_dirs = []
+    seen = set()
+    for d in search_dirs:
+        if d and d not in seen:
+            seen.add(d)
+            uniq_dirs.append(d)
+
+    for base_dir in uniq_dirs:
+        for name in ("exiftool.exe", "exiftool(-k).exe", "exiftool"):
+            p = os.path.join(base_dir, name)
+            if os.path.isfile(p):
+                return p
+
     return shutil.which("exiftool") or shutil.which("exiftool.exe")
 
 
