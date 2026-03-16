@@ -252,6 +252,43 @@ class DBManager:
                     pass
         return len(rows)
 
+    def fill_asset_producer_if_missing(self, phash, producer):
+        """仅在素材作者为空时回填作者，并同步 metadata_json 中的 producer。"""
+        if not self.conn or not phash or not producer:
+            return False
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT producer, metadata_json FROM assets WHERE phash = %s",
+                (phash,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+
+            current = (row.get('producer') or '').strip()
+            if current:
+                return False
+
+            params = [producer]
+            sql = "UPDATE assets SET producer = %s"
+
+            raw_meta = row.get('metadata_json')
+            if raw_meta:
+                try:
+                    meta = json.loads(raw_meta)
+                except:
+                    meta = None
+                if isinstance(meta, dict):
+                    meta['producer'] = producer
+                    sql += ", metadata_json = %s"
+                    params.append(json.dumps(meta, ensure_ascii=False, default=str))
+
+            sql += " WHERE phash = %s AND (producer IS NULL OR TRIM(producer) = '')"
+            params.append(phash)
+            cur.execute(sql, tuple(params))
+            return bool(cur.rowcount)
+
     def add_derive(self, src, dst, rel_type, operator, remark=""):
         if not self.conn:
             return

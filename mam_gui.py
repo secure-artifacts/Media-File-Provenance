@@ -155,27 +155,34 @@ def _single_instance_check() -> bool:
 # ─────────────────────────────────────────────────────
 # 辅助：确保素材已在库中（自动登记）
 # ─────────────────────────────────────────────────────
-def ensure_registered(filepath, operator_name):
+def ensure_registered(filepath, operator_name, fill_missing_producer=False):
     """
     若素材未登记则自动登记并写入元数据。
+    fill_missing_producer=True 时，命中旧素材且作者为空，会补成当前人员。
     返回 (phash, record_dict) 或 (None, None)
     """
+    fname = os.path.basename(filepath)
     img = get_thumbnail(filepath)
     if img is None:
-        gui_log(f"❌ 无法读取: {os.path.basename(filepath)}")
+        gui_log(f"❌ 无法读取: {fname}")
         return None, None
 
     ph, source = get_phash_from_file(filepath, img)
     if not ph:
-        gui_log(f"❌ phash计算失败: {os.path.basename(filepath)}")
+        gui_log(f"❌ phash计算失败: {fname}")
         return None, None
 
     existing = db.lookup(ph, threshold=12)
     if existing:
+        producer = (existing.get('producer') or '').strip()
+        if fill_missing_producer and not producer and existing.get('distance', 0) == 0:
+            if db.fill_asset_producer_if_missing(existing['phash'], operator_name):
+                existing = dict(existing)
+                existing['producer'] = operator_name
+                gui_log(f"📝 命中旧素材，已补制作人: {fname} -> {operator_name}")
         return existing['phash'], existing
 
     # 新素材 → 登记
-    fname = os.path.basename(filepath)
     atype = get_asset_type(filepath)
     fsize = get_file_size(filepath)
     now   = datetime.now()
@@ -1776,7 +1783,7 @@ class MamApp(QMainWindow):
         def task():
             phashes = []
             for fp in fps:
-                ph, rec = ensure_registered(fp, op)
+                ph, rec = ensure_registered(fp, op, fill_missing_producer=True)
                 if ph:
                     phashes.append(ph)
                     prod = rec.get('producer','?') if isinstance(rec, dict) else '?'
