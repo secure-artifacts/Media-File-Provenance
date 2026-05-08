@@ -284,7 +284,11 @@ def get_thumbnail(filepath):
         return cv2_read(filepath)
     if ext in VID_EXTS:
         cap = cv2.VideoCapture(filepath)
-        cap.set(cv2.CAP_PROP_POS_MSEC, 500)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        if frame_count and frame_count > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_count / 2))
+        else:
+            cap.set(cv2.CAP_PROP_POS_MSEC, 1500)
         ok, frame = cap.read()
         cap.release()
         return frame if ok else None

@@ -573,10 +573,139 @@ class Worker(QThread):
 # ─────────────────────────────────────────────────────
 # 主窗口
 # ─────────────────────────────────────────────────────
+
+
+class JSONDropArea(QFrame):
+    filesChanged = pyqtSignal(list)
+    def __init__(self, title="拖入 JSON 文件"):
+        super().__init__()
+        self._file = None
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(80)
+        self.setStyleSheet("border:2px dashed #c7c7cc;border-radius:10px;background:#fafafa;")
+        lay = QVBoxLayout(self)
+        self.lbl = QLabel(title)
+        self.lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl.setStyleSheet("color:#aaa;font-size:14px;")
+        lay.addWidget(self.lbl)
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls(): e.acceptProposedAction()
+    def dropEvent(self, e):
+        for u in e.mimeData().urls():
+            p = os.path.abspath(u.toLocalFile())
+            if p.lower().endswith('.json'):
+                self._file = p
+                self.lbl.setText(f"已选择: {os.path.basename(p)}")
+                self.filesChanged.emit([p])
+                return
+    def clear(self):
+        self._file = None
+        self.lbl.setText("拖入 JSON 文件")
+        self.filesChanged.emit([])
+    def file(self):
+        return self._file
+
+class BatchDeriveWorker(QThread):
+    progress = pyqtSignal(int, int, int, int)
+    log_line = pyqtSignal(str)
+    finished = pyqtSignal(dict)
+
+    def __init__(self, json_path, operator):
+        super().__init__()
+        self._json_path = json_path
+        self._operator = operator
+        self._should_stop = False
+
+    def stop(self):
+        self._should_stop = True
+
+    def run(self):
+        try:
+            import json
+            with open(self._json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            self.log_line.emit(f"❌ 读取JSON失败: {e}")
+            self.finished.emit({'total': 0, 'done': 0, 'success': 0, 'failed': 0})
+            return
+
+        if not isinstance(data, list):
+            self.log_line.emit("❌ JSON格式错误: 预期的格式是对象列表")
+            self.finished.emit({'total': 0, 'done': 0, 'success': 0, 'failed': 0})
+            return
+
+        total = len(data)
+        done = success = failed = 0
+        self.log_line.emit(f"📂 发现 {total} 条衍生记录准备处理")
+
+        # 使用外部已经导入的 DBManager 和 db
+        thread_db = DBManager()
+        thread_db.conf = dict(db.conf)
+        ok, msg = thread_db.connect(init_tables=False, warm_cache=False)
+        if not ok:
+            self.log_line.emit(f"❌ 数据库连接失败: {msg}")
+            self.finished.emit({'total': total, 'done': 0, 'success': 0, 'failed': total})
+            return
+
+        try:
+            for item in data:
+                if self._should_stop:
+                    break
+
+                done += 1
+                sources = item.get("source", [])
+                target = item.get("target", "")
+
+                if not sources or not target:
+                    failed += 1
+                    self.log_line.emit(f"⚠️ 记录缺少source或target: 第 {done} 条")
+                    self.progress.emit(total, done, success, failed)
+                    continue
+                
+                try:
+                    dst_phash, _ = ensure_registered(target, self._operator, fill_missing_producer=True)
+                    if not dst_phash:
+                        failed += 1
+                        self.log_line.emit(f"❌ target注册失败: {target}")
+                        self.progress.emit(total, done, success, failed)
+                        continue
+                except Exception as e:
+                    failed += 1
+                    self.log_line.emit(f"❌ target处理异常 {target}: {e}")
+                    self.progress.emit(total, done, success, failed)
+                    continue
+
+                item_success = True
+                for src in sources:
+                    try:
+                        src_phash, _ = ensure_registered(src, self._operator, fill_missing_producer=True)
+                        if not src_phash:
+                            item_success = False
+                            self.log_line.emit(f"❌ source注册失败: {src}")
+                            continue
+
+                        thread_db.add_derive(src_phash, dst_phash, "生图衍生", self._operator, remark="JSON批量导入")
+                    except Exception as e:
+                        item_success = False
+                        self.log_line.emit(f"❌ source处理异常 {src}: {e}")
+
+                if item_success:
+                    success += 1
+                    if success % 10 == 0:
+                        self.log_line.emit(f"✅ 已成功建立 {success} 条衍生关系")
+                else:
+                    failed += 1
+                    
+                self.progress.emit(total, done, success, failed)
+        finally:
+            thread_db.close()
+
+        self.finished.emit({'total': total, 'done': done, 'success': success, 'failed': failed})
+
 class MamApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MAM 素材溯源管理系统 v3.1")
+        self.setWindowTitle("MAM 素材溯源管理系统 v3.2.0")
         self.setMinimumSize(1280, 920)
         self._cfg     = load_config()
         self._workers = []
@@ -669,6 +798,7 @@ class MamApp(QMainWindow):
             ("Canva批量", "🗃", self._tab_canva_batch()),
             ("溯源查询", "🔍", self._tab_query()),
             ("素材总览", "🗂", self._tab_library()),
+                        ("批量衍生", "🎬", self._tab_derive_batch()),
             ("批量扫描", "⚡", self._tab_batch_scan()),
         ]
 
@@ -751,6 +881,10 @@ class MamApp(QMainWindow):
 
     def _clear_register_inputs(self):
         self._drop_raw.clear()
+
+    def _clear_derive_batch_inputs(self):
+        if hasattr(self, '_drop_derive_batch'):
+            self._drop_derive_batch.clear()
 
     def _clear_derive_inputs(self):
         self._drop_src.clear()
@@ -1108,6 +1242,87 @@ class MamApp(QMainWindow):
         return w
 
     # ── Tab5：源迹查询 ──────────────────────────────────────────────
+
+    def _tab_derive_batch(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        v.addWidget(QLabel("拖入“图片生成视频记录.json”进行批量自动登记并建立衍生关联。"))
+        
+        # 拖拽区
+        self._drop_derive_batch = JSONDropArea("拖入 JSON 文件")
+        v.addWidget(self._drop_derive_batch)
+        
+        # 按钮区
+        btn_action = QHBoxLayout(); btn_action.setSpacing(10)
+        
+        btn_browse = PushButton("📁  浏览选择文件")
+        btn_browse.setStyleSheet("background:#95a5a6;color:#fff;height:42px;font-size:14px;border:none;border-radius:9px;")
+        def _browse():
+            fp, _ = QFileDialog.getOpenFileName(self, "选择JSON记录", "", "JSON Files (*.json)")
+            if fp:
+                from PyQt6.QtCore import QUrl
+                class MockMime:
+                    def urls(self): return [QUrl.fromLocalFile(fp)]
+                class MockEvent:
+                    def mimeData(self): return MockMime()
+                self._drop_derive_batch.dropEvent(MockEvent())
+        btn_browse.clicked.connect(_browse)
+        
+        btn_start = PushButton("🎬  开始批量导入与关联")
+        btn_start.setStyleSheet("background:#8e44ad;color:#fff;height:42px;font-size:14px;border:none;border-radius:9px;")
+        btn_start.clicked.connect(self._do_derive_batch)
+        
+        btn_action.addWidget(btn_browse)
+        btn_action.addWidget(btn_start)
+        v.addLayout(btn_action)
+        v.addStretch(1)
+        return w
+
+    def _do_derive_batch(self):
+        if self._current_worker is not None:
+            QMessageBox.warning(self, "提示", "当前有后台任务正在进行，请稍候。")
+            return
+            
+        fp = self._drop_derive_batch.file()
+        if not fp or not fp.lower().endswith(".json"):
+            QMessageBox.critical(self, "错误", "请先拖入一个有效的 JSON 记录文件！")
+            return
+
+        btn = self.sender()
+        btn.setEnabled(False)
+        btn.setText("⏳ 正在处理...")
+        self._log("🎬 开始通过 JSON 批量衍生导入...")
+        
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
+        self._progress.show()
+
+        w = BatchDeriveWorker(fp, self._cfg.get('user_name', 'System'))
+
+        def _on_prog(total, done, success, failed):
+            if total > 0:
+                self._progress.setValue(int(done * 100 / total))
+                self._progress.setFormat(f"已处理: {done}/{total} [成功:{success} 失败:{failed}]")
+
+        def _on_fin(res):
+            self._progress.hide()
+            btn.setEnabled(True)
+            btn.setText("🎬  开始批量导入与关联")
+            self._clear_derive_batch_inputs()
+            if w in self._workers:
+                self._workers.remove(w)
+            self._current_worker = None
+            msg = f"🎉 批量衍生处理完成！\n总数：{res['total']}，成功：{res['success']}，失败：{res['failed']}"
+            self._log(msg)
+            QMessageBox.information(self, "完成", msg)
+
+        w.log_line.connect(self._log)
+        w.progress.connect(_on_prog)
+        w.finished.connect(_on_fin)
+        
+        self._workers.append(w)
+        self._current_worker = w
+        w.start()
+
     def _tab_query(self):
         w = QWidget(); v = QVBoxLayout(w)
         v.setContentsMargins(8, 8, 8, 8); v.setSpacing(10)
