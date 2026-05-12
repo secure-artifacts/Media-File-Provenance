@@ -180,7 +180,7 @@ def _single_instance_check() -> bool:
 # ─────────────────────────────────────────────────────
 # 辅助：确保素材已在库中（自动登记）
 # ─────────────────────────────────────────────────────
-def ensure_registered(filepath, operator_name, fill_missing_producer=False):
+def ensure_registered(filepath, operator_name, fill_missing_producer=False, db_inst=None):
     """
     若素材未登记则自动登记并写入元数据。
     fill_missing_producer=True 时，命中旧素材且作者为空，会补成当前人员。
@@ -197,11 +197,13 @@ def ensure_registered(filepath, operator_name, fill_missing_producer=False):
         gui_log(f"❌ phash计算失败: {fname}")
         return None, None
 
-    existing = db.lookup(ph, threshold=12)
+    current_db = db_inst or db
+    existing = current_db.lookup(ph, threshold=0)
     if existing:
+        gui_log(f"🔎 命中库中素材: {fname}  phash:{existing['phash']}")
         producer = (existing.get('producer') or '').strip()
         if fill_missing_producer and not producer and existing.get('distance', 0) == 0:
-            if db.fill_asset_producer_if_missing(existing['phash'], operator_name):
+            if current_db.fill_asset_producer_if_missing(existing['phash'], operator_name):
                 existing = dict(existing)
                 existing['producer'] = operator_name
                 gui_log(f"📝 命中旧素材，已补制作人: {fname} -> {operator_name}")
@@ -217,7 +219,7 @@ def ensure_registered(filepath, operator_name, fill_missing_producer=False):
         "producer": operator_name, "created_at": now.isoformat()
     }
     write_metadata(filepath, rec)
-    db.upsert_asset(ph, fname, atype, fsize, operator_name, now,
+    current_db.upsert_asset(ph, fname, atype, fsize, operator_name, now,
                     json.dumps(rec, ensure_ascii=False, default=str),
                     make_thumb_bytes(img))
     gui_log(f"📌 自动登记: {fname}  作者:{operator_name}  phash:{ph}")
@@ -470,7 +472,7 @@ class ScanWorker(QThread):
         folder      = self._folder
         folder_name = os.path.basename(folder.rstrip('/\\'))
         # 自动识别 Canva 文件夹名中的 【ID】
-        m_id        = re.search(r'【(\d+)】', folder_name)
+        m_id        = re.search(r'【【(\d+)】】', folder_name)
         canva_id    = m_id.group(1) if m_id else None
         canva_name  = re.sub(r'【\d+】', '', folder_name).strip() if m_id else None
 
@@ -839,6 +841,7 @@ class FastBindWorker(QThread):
 
 class CanvaAutoMonitorWorker(QThread):
     found_jsons = pyqtSignal(list)
+    found_canva_products = pyqtSignal(list, str)
     log_line = pyqtSignal(str)
 
     def __init__(self, save_dir, processed_file):
@@ -871,48 +874,87 @@ class CanvaAutoMonitorWorker(QThread):
 
     def run(self):
         import time
-        self.log_line.emit(f"👁 启动自动监控目录: {self.save_dir}")
+        import re
+        self.log_line.emit(f"👁 启动统一自动监控引擎: {self.save_dir}")
+        
+        def extract_tid(name):
+            m = re.search(r'【(\d+)】', name)
+            return m.group(1) if m else None
+            
+        MEDIA_EXTS = ('.mp4', '.mov', '.png', '.jpg', '.jpeg', '.gif', '.webp')
+
         while not self._should_stop:
             try:
                 if os.path.exists(self.save_dir):
                     for fname in os.listdir(self.save_dir):
-                        if fname.lower().endswith('.zip'):
-                            fpath = os.path.join(self.save_dir, fname)
-                            # Wait for file to finish downloading/writing
-                            try:
-                                size_before = os.path.getsize(fpath)
-                                time.sleep(1)
-                                size_after = os.path.getsize(fpath)
-                                if size_before != size_after or size_before == 0:
-                                    continue
-                            except:
-                                continue
+                        # Avoid processing incomplete files
+                        if fname.lower().endswith('.crdownload') or fname.lower().endswith('.tmp'):
+                            continue
+                            
+                        fpath = os.path.join(self.save_dir, fname)
+                        if fname in self._processed or not os.path.isfile(fpath):
+                            continue
+                            
+                        # Only process zip or media files
+                        is_zip = fname.lower().endswith('.zip')
+                        is_media = fname.lower().endswith(MEDIA_EXTS)
+                        
+                        if not is_zip and not is_media:
+                            continue
 
-                            if fname not in self._processed:
-                                self.log_line.emit(f"📦 发现新压缩包: {fname}，正在解压...")
-                                extract_dir = os.path.join(self.save_dir, os.path.splitext(fname)[0])
-                                os.makedirs(extract_dir, exist_ok=True)
+                        # Wait for file to finish downloading/writing
+                        try:
+                            size_before = os.path.getsize(fpath)
+                            time.sleep(1)
+                            size_after = os.path.getsize(fpath)
+                            if size_before != size_after or size_before == 0:
+                                continue
+                        except:
+                            continue
+                            
+                        if is_zip:
+                            self.log_line.emit(f"📦 发现新压缩包: {fname}，统一安全解压中...")
+                            extract_dir = os.path.join(self.save_dir, os.path.splitext(fname)[0])
+                            os.makedirs(extract_dir, exist_ok=True)
+                            
+                            try:
+                                import zipfile
+                                with zipfile.ZipFile(fpath, 'r') as zf:
+                                    zf.extractall(extract_dir)
                                 
-                                try:
-                                    with zipfile.ZipFile(fpath, 'r') as zf:
-                                        zf.extractall(extract_dir)
+                                self._processed.append(fname)
+                                self._save_processed()
+                                
+                                # Route A: Batch Derive (check JSON)
+                                found_jsons = []
+                                media_files = []
+                                for root, _, _files in os.walk(extract_dir):
+                                    for f in _files:
+                                        if f.lower().endswith('.json'):
+                                            found_jsons.append(os.path.join(root, f))
+                                        elif f.lower().endswith(MEDIA_EXTS):
+                                            if root == extract_dir:
+                                                media_files.append(os.path.join(root, f))
+
+                                if found_jsons:
+                                    self.found_jsons.emit(found_jsons)
+                                
+                                # Route B: Canva Batch Products
+                                tid = extract_tid(fname)
+                                if tid and media_files:
+                                    self.found_canva_products.emit(media_files, tid)
                                     
-                                    self._processed.append(fname)
-                                    self._save_processed()
-                                    
-                                    # Find all json files
-                                    found = []
-                                    for root, _, files in os.walk(extract_dir):
-                                        for f in files:
-                                            if f.lower().endswith('.json'):
-                                                found.append(os.path.join(root, f))
-                                                
-                                    if found:
-                                        self.found_jsons.emit(found)
-                                    else:
-                                        self.log_line.emit(f"⚠️ 解压完毕，但在 {fname} 中未找到任何 JSON 文件。")
-                                except zipfile.BadZipFile:
-                                    self.log_line.emit(f"❌ 压缩包损坏: {fname}")
+                            except Exception as e:
+                                self.log_line.emit(f"❌ 解压或处理失败: {e}")
+                                
+                        elif is_media:
+                            tid = extract_tid(fname)
+                            if tid:
+                                self.log_line.emit(f"🎥 发现新单体成品: {fname} (ID:{tid})")
+                                self._processed.append(fname)
+                                self._save_processed()
+                                self.found_canva_products.emit([fpath], tid)
+
             except Exception as e:
                 pass
             time.sleep(3)
@@ -1730,6 +1772,17 @@ class MamApp(QMainWindow):
         btn_clr.clicked.connect(self._clear_canva_batch_inputs)
         act.addWidget(btn, 1); act.addWidget(btn_clr)
         v.addLayout(act)
+
+        self._chk_canva_batch_auto_monitor = QCheckBox("开启 Canva 成品自动关联监控 (共用 CanvaTools 路径)")
+        self._chk_canva_batch_auto_monitor.setStyleSheet("color: #2c3e50; font-size: 14px; font-weight: bold; margin-top: 10px;")
+        
+        # Load state
+        is_batch_auto_checked = self._cfg.get('canva_batch_auto_monitor', False)
+        self._chk_canva_batch_auto_monitor.setChecked(is_batch_auto_checked)
+        self._chk_canva_batch_auto_monitor.toggled.connect(self._toggle_canva_batch_auto_monitor)
+        
+        v.addWidget(self._chk_canva_batch_auto_monitor)
+
         v.addStretch()
         return w
 
@@ -1785,14 +1838,21 @@ class MamApp(QMainWindow):
         return w
 
 
+    def _toggle_canva_batch_auto_monitor(self, checked):
+        self._cfg['canva_batch_auto_monitor'] = checked
+        save_config(self._cfg)
+        self._update_auto_monitor_state()
+
     def _toggle_auto_monitor(self, checked):
         self._cfg['canva_auto_monitor'] = checked
         save_config(self._cfg)
+        self._update_auto_monitor_state()
+
+    def _update_auto_monitor_state(self):
+        needs_monitor = self._cfg.get('canva_auto_monitor', False) or self._cfg.get('canva_batch_auto_monitor', False)
         
-        if checked:
-            # Start worker
+        if needs_monitor:
             if self._canva_auto_worker is None or not self._canva_auto_worker.isRunning():
-                # Read save path from canva tools config
                 import json
                 save_dir = os.path.join(os.path.expanduser('~'), 'Desktop')
                 canvatools_config_file = os.path.join(os.path.expanduser('~'), '.canva_tools_config.json')
@@ -1807,11 +1867,11 @@ class MamApp(QMainWindow):
                 self._canva_auto_worker.setParent(self)
                 self._canva_auto_worker.log_line.connect(self._log)
                 self._canva_auto_worker.found_jsons.connect(self._on_canva_auto_found_jsons)
+                self._canva_auto_worker.found_canva_products.connect(self._on_canva_auto_found_products)
                 self._canva_auto_worker.start()
         else:
             if self._canva_auto_worker:
                 self._canva_auto_worker.stop()
-                
                 self._canva_auto_worker = None
 
     def _on_canva_auto_found_jsons(self, json_paths):
@@ -2660,7 +2720,7 @@ class MamApp(QMainWindow):
 
     def _extract_canva_id_from_folder(self, folder: str):
         name = os.path.basename(folder.rstrip('/\\'))
-        m = re.search(r'【(\d+)】', name)
+        m = re.search(r'【【(\d+)】】', name)
         return m.group(1) if m else None
 
     def _do_canva_batch(self):
@@ -3285,6 +3345,9 @@ class MamApp(QMainWindow):
 
             def calc_hash(fp):
                 img = get_thumbnail(fp)
+                existing_meta = read_metadata(fp) or {}
+                if existing_meta.get('phash'):
+                    return {'fp': fp, 'img': img, 'phash': existing_meta['phash']}
                 ph = get_phash(img) if img is not None else None
                 return {'fp': fp, 'img': img, 'phash': ph}
 
@@ -4223,6 +4286,114 @@ class MamApp(QMainWindow):
         self._log(msg)
         self._refresh_lib()
 
+    def _on_canva_auto_found_products(self, files, template_id):
+        if not files or not template_id: return
+        
+        if not db.conn:
+            self._log("⚠️ 数据库未连接，跳过成品自动关联登记")
+            return
+            
+        template_pack = db.get_canva_template_assets_basic(template_id)
+        if not template_pack:
+            self._log(f"⚠️ 模板ID【{template_id}】不存在，跳过成品自动登记")
+            return
+            
+        tmpl = template_pack.get('template', {})
+        assets = template_pack.get('assets', [])
+        src_infos = []
+        src_phashes = []
+        for a in assets:
+            ph = a.get('phash')
+            if not ph: continue
+            src_phashes.append(ph)
+            src_infos.append({
+                "phash": ph,
+                "filename": a.get('filename', '?'),
+                "producer": a.get('producer', '?'),
+                "asset_type": a.get('asset_type', '?'),
+            })
+
+        uniq_ph = []
+        seen_ph = set()
+        for ph in src_phashes:
+            if ph not in seen_ph:
+                seen_ph.add(ph)
+                uniq_ph.append(ph)
+                
+        op = self._cfg.get('user_name', 'System')
+        
+        def task():
+          try:
+            w.progress.emit(10)
+            
+            thread_db = DBManager()
+            if not thread_db.clone_auth(db):
+                ok, msg = thread_db.connect(init_tables=False, warm_cache=False)
+                if not ok:
+                    gui_log(f"❌ 自动检测后台数据库连接失败: {msg}")
+                    return {"success": False}
+                    
+            ok_files = 0
+            new_phashes = []
+            for idx, fp in enumerate(files):
+                w.progress.emit(10 + int(80 * (idx / len(files))))
+                ph, _ = ensure_registered(fp, op, db_inst=thread_db)
+                if not ph:
+                    gui_log(f"  ❌ 文件处理失败: {os.path.basename(fp)}")
+                    continue
+
+                # Update metadata
+                rec = read_metadata(fp) or {}
+
+                rec.update({
+                    "phash": ph,
+                    "filename": os.path.basename(fp),
+                    "asset_type": get_asset_type(fp),
+                    "file_size": get_file_size(fp),
+                    "producer": op,
+                    "created_at": datetime.now().isoformat(),
+                    "canva_template": {
+                        "template_id": template_id,
+                        "template_name": tmpl.get('template_name', ''),
+                        "creator": tmpl.get('creator', ''),
+                    }
+                })
+                write_metadata(fp, rec)
+                
+                # Upsert to DB
+                thread_db.upsert_assets_bulk([(
+                    ph,
+                    os.path.basename(fp),
+                    get_asset_type(fp),
+                    get_file_size(fp),
+                    op,
+                    datetime.now(),
+                    json.dumps(rec, ensure_ascii=False, default=str),
+                    None,
+                )])
+                ok_files += 1
+                new_phashes.append(ph)
+                gui_log(f"  ✅ 自动检测并成功关联: [{op}]{os.path.basename(fp)} (phash:{ph}) <- 模板【{template_id}】")
+                
+            if new_phashes:
+                thread_db.add_canva_template(template_id, tmpl.get('template_name', ''), op, new_phashes, "成品自动关联")
+                
+            thread_db.close()
+            w.progress.emit(100)
+            return {"success": True, "done": ok_files, "total": len(files)}
+          except Exception as e:
+            import traceback
+            gui_log(f"❌ Route B Error: {e} | {traceback.format_exc()}")
+            return {"success": False}
+            
+        self._log(f"🎬 触发 Canva 成品自动关联入库: 发现 {len(files)} 个文件，隶属模板【{template_id}】")
+        w = Worker(task)
+        w.setParent(self)
+        w.progress.connect(lambda v: (self._progress.setVisible(True), self._progress.setValue(v)))
+        w.finished.connect(lambda: self._progress.setVisible(False))
+        w.start()
+        self._workers.append(w)
+
 
 if __name__ == "__main__":
     _install_exception_hook()
@@ -4429,3 +4600,5 @@ QFrame[frameShape="4"], QFrame[frameShape="5"] {
         except:
             pass
         raise
+
+

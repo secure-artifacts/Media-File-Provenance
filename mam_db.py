@@ -146,7 +146,7 @@ class DBManager:
             payload.append(item)
             
         try:
-            r = self._session.post(url, json=payload, timeout=30)
+            r = self._session.post(url, json={"items": payload}, timeout=30)
             if r.status_code in (200, 201):
                 if self._phash_cache is not None:
                     for p in payload:
