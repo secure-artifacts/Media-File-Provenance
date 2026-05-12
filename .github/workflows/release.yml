@@ -231,6 +231,7 @@ jobs:
           choco install innosetup -y --no-progress
           New-Item -ItemType Directory -Force release | Out-Null
           New-Item -ItemType Directory -Force packaging/windows | Out-Null
+          Copy-Item "messages_en.json" -Destination "release\messages_en.json" -ErrorAction SilentlyContinue
           
           # Verify dist\MAMDesktop exists before compilation
           if (-not (Test-Path "dist\MAMDesktop")) {
@@ -288,6 +289,7 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
           rm -rf pkgroot release
           mkdir -p pkgroot/Applications release
+          cp messages_en.json release/messages_en.json || true
           cp -R dist/MAMDesktop.app pkgroot/Applications/
 
           pkgbuild \

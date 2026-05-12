@@ -1,6 +1,19 @@
 # mam_gui.py — 主界面（纯 UI，业务逻辑见 mam_core / mam_db / mam_meta）
 import sys
 
+import threading
+import socket
+from werkzeug.serving import make_server
+
+SERVER_IMPORT_ERROR = ""
+try:
+    from mam_canvatools_server import app as flask_app, run_network_self_check as server_network_self_check
+except Exception as e:
+    flask_app = None
+    server_network_self_check = None
+    SERVER_IMPORT_ERROR = str(e)
+
+
 import os
 import re
 import json
@@ -23,10 +36,22 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QTabWidget, QTableWidget, QTableWidgetItem,
     QMessageBox, QFormLayout, QFrame, QTextEdit, QHeaderView, QScrollArea,
     QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem, QSplitter, QComboBox,
-    QFileDialog, QProgressBar, QProgressDialog, QStackedWidget, QSpinBox, QCheckBox
+    QFileDialog, QProgressBar, QProgressDialog, QStackedWidget, QSpinBox, QCheckBox,
+    QGroupBox
 )
 from PyQt6.QtCore  import Qt, QThread, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui   import QPixmap, QImage, QColor, QFont
+
+
+import sys
+import traceback
+
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    print("UNHANDLED EXCEPTION!", file=sys.stderr)
+    traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stderr)
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+sys.excepthook = global_exception_handler
 
 # 兼容层：保留现有方法中的控件名，底层统一使用 PyQt6 原生控件
 PushButton = QPushButton
@@ -577,9 +602,9 @@ class Worker(QThread):
 
 class JSONDropArea(QFrame):
     filesChanged = pyqtSignal(list)
-    def __init__(self, title="拖入 JSON 文件"):
+    def __init__(self, title="拖入 JSON 文件或包含 JSON 的文件夹"):
         super().__init__()
-        self._file = None
+        self._files = []
         self.setAcceptDrops(True)
         self.setMinimumHeight(80)
         self.setStyleSheet("border:2px dashed #c7c7cc;border-radius:10px;background:#fafafa;")
@@ -591,28 +616,40 @@ class JSONDropArea(QFrame):
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls(): e.acceptProposedAction()
     def dropEvent(self, e):
+        added = []
         for u in e.mimeData().urls():
             p = os.path.abspath(u.toLocalFile())
-            if p.lower().endswith('.json'):
-                self._file = p
-                self.lbl.setText(f"已选择: {os.path.basename(p)}")
-                self.filesChanged.emit([p])
-                return
+            if os.path.isdir(p):
+                for root, _, files in os.walk(p):
+                    for f in files:
+                        if f.lower().endswith('.json'):
+                            added.append(os.path.join(root, f))
+            elif p.lower().endswith('.json'):
+                added.append(p)
+        if added:
+            self._files = added
+            if len(self._files) == 1:
+                self.lbl.setText(f"已选择: {os.path.basename(self._files[0])}")
+            else:
+                self.lbl.setText(f"已选择: {len(self._files)} 个 JSON 文件")
+            self.filesChanged.emit(self._files)
     def clear(self):
-        self._file = None
-        self.lbl.setText("拖入 JSON 文件")
+        self._files = []
+        self.lbl.setText("拖入 JSON 文件或包含 JSON 的文件夹")
         self.filesChanged.emit([])
+    def files(self):
+        return self._files
     def file(self):
-        return self._file
+        return self._files[0] if self._files else None
 
 class BatchDeriveWorker(QThread):
     progress = pyqtSignal(int, int, int, int)
     log_line = pyqtSignal(str)
     finished = pyqtSignal(dict)
 
-    def __init__(self, json_path, operator):
+    def __init__(self, json_paths, operator):
         super().__init__()
-        self._json_path = json_path
+        self._json_paths = json_paths
         self._operator = operator
         self._should_stop = False
 
@@ -620,25 +657,31 @@ class BatchDeriveWorker(QThread):
         self._should_stop = True
 
     def run(self):
-        try:
-            import json
-            with open(self._json_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception as e:
-            self.log_line.emit(f"❌ 读取JSON失败: {e}")
+        all_data = []
+        
+        for jp in self._json_paths:
+            if self._should_stop: return
+            try:
+                import json
+                with open(jp, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    base_dir = os.path.dirname(jp)
+                    for item in data:
+                        item['_base_dir'] = base_dir
+                    all_data.extend(data)
+            except Exception as e:
+                self.log_line.emit(f"❌ 读取JSON失败 ({os.path.basename(jp)}): {e}")
+
+        if not all_data:
+            self.log_line.emit("❌ 未找到任何有效的衍生记录")
             self.finished.emit({'total': 0, 'done': 0, 'success': 0, 'failed': 0})
             return
 
-        if not isinstance(data, list):
-            self.log_line.emit("❌ JSON格式错误: 预期的格式是对象列表")
-            self.finished.emit({'total': 0, 'done': 0, 'success': 0, 'failed': 0})
-            return
-
-        total = len(data)
+        total = len(all_data)
         done = success = failed = 0
-        self.log_line.emit(f"📂 发现 {total} 条衍生记录准备处理")
+        self.log_line.emit(f"📂 共发现 {total} 条衍生记录准备处理")
 
-        # 使用外部已经导入的 DBManager 和 db
         thread_db = DBManager()
         if not thread_db.clone_auth(db):
             ok, msg = thread_db.connect(init_tables=False, warm_cache=False)
@@ -648,11 +691,12 @@ class BatchDeriveWorker(QThread):
             return
 
         try:
-            for item in data:
+            for item in all_data:
                 if self._should_stop:
                     break
 
                 done += 1
+                base_dir = item.pop('_base_dir', '')
                 sources = item.get("source", [])
                 target = item.get("target", "")
 
@@ -661,6 +705,9 @@ class BatchDeriveWorker(QThread):
                     self.log_line.emit(f"⚠️ 记录缺少source或target: 第 {done} 条")
                     self.progress.emit(total, done, success, failed)
                     continue
+
+                if not os.path.isabs(target):
+                    target = os.path.join(base_dir, target)
                 
                 try:
                     dst_phash, _ = ensure_registered(target, self._operator, fill_missing_producer=True)
@@ -677,6 +724,8 @@ class BatchDeriveWorker(QThread):
 
                 item_success = True
                 for src in sources:
+                    if not os.path.isabs(src):
+                        src = os.path.join(base_dir, src)
                     try:
                         src_phash, _ = ensure_registered(src, self._operator, fill_missing_producer=True)
                         if not src_phash:
@@ -702,7 +751,177 @@ class BatchDeriveWorker(QThread):
 
         self.finished.emit({'total': total, 'done': done, 'success': success, 'failed': failed})
 
+
+import zipfile
+import hashlib
+
+
+import tempfile
+import queue
+
+class FastBindWorker(QThread):
+    progress = pyqtSignal(int, int)
+    log_line = pyqtSignal(str)
+    finished = pyqtSignal(dict)
+
+    def __init__(self, data, operator):
+        super().__init__()
+        self.data = data
+        self.operator = operator
+
+    def run(self):
+        canva_id = str(self.data.get('canvaId', '')).replace('【', '').replace('】', '')
+        assets = self.data.get('assets', [])
+        
+        if not canva_id or not assets:
+            self.log_line.emit("❌ 极速登记失败: 缺失必要参数")
+            self.finished.emit({"success": False})
+            return
+
+        self.log_line.emit(f"🎬 极速极速纯哈希登记开始: 编号【{canva_id}】，素材数: {len(assets)}")
+        
+        thread_db = DBManager()
+        if not thread_db.clone_auth(db):
+            ok, msg = thread_db.connect(init_tables=False, warm_cache=False)
+            if not ok:
+                self.log_line.emit(f"❌ 数据库连接失败: {msg}")
+                self.finished.emit({"success": False})
+                return
+
+        from mam_canvatools_server import download_bytes, guess_extension
+        import shutil
+
+        temp_dir = tempfile.mkdtemp(prefix="canva_fastbind_")
+        phashes = []
+        
+        try:
+            for idx, a in enumerate(assets):
+                try:
+                    url = a.get('url')
+                    name = a.get('name', f"asset_{idx}")
+                    content_bytes, headers = download_bytes(url)
+                    
+                    if not "." in name:
+                        content_type = headers.get("content-type", "")
+                        ext = guess_extension(content_type, ".bin")
+                        name = f"{name}{ext}"
+                    
+                    fpath = os.path.join(temp_dir, name)
+                    with open(fpath, 'wb') as f:
+                        f.write(content_bytes)
+                    
+                    self.log_line.emit(f"  📥 下载完毕: {name} ({len(content_bytes)} bytes)")
+                    
+                    ph, rec = ensure_registered(fpath, self.operator, fill_missing_producer=True)
+                    if ph:
+                        phashes.append(ph)
+                        self.log_line.emit(f"  ✅ 登记成功: Hash {ph}")
+                    
+                except Exception as e:
+                    self.log_line.emit(f"  ❌ 登记失败 ({a.get('name')}): {e}")
+                
+                self.progress.emit(len(assets), idx + 1)
+
+            if phashes:
+                thread_db.add_canva_template(canva_id, canva_id, self.operator, phashes, "前端极速登记")
+                self.log_line.emit(f"✅ 编号【{canva_id}】与 {len(phashes)} 个素材绑定成功！")
+            else:
+                self.log_line.emit("⚠️ 没有产生任何有效的哈希记录。")
+                
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except: pass
+            thread_db.close()
+
+        self.finished.emit({"success": True})
+
+
+class CanvaAutoMonitorWorker(QThread):
+    found_jsons = pyqtSignal(list)
+    log_line = pyqtSignal(str)
+
+    def __init__(self, save_dir, processed_file):
+        super().__init__()
+        self.save_dir = save_dir
+        self.processed_file = processed_file
+        self._should_stop = False
+        self._processed = []
+        self._load_processed()
+
+    def _load_processed(self):
+        if os.path.exists(self.processed_file):
+            try:
+                import json
+                with open(self.processed_file, 'r', encoding='utf-8') as f:
+                    self._processed = json.load(f)
+            except:
+                self._processed = []
+
+    def _save_processed(self):
+        try:
+            import json
+            with open(self.processed_file, 'w', encoding='utf-8') as f:
+                json.dump(self._processed, f)
+        except:
+            pass
+
+    def stop(self):
+        self._should_stop = True
+
+    def run(self):
+        import time
+        self.log_line.emit(f"👁 启动自动监控目录: {self.save_dir}")
+        while not self._should_stop:
+            try:
+                if os.path.exists(self.save_dir):
+                    for fname in os.listdir(self.save_dir):
+                        if fname.lower().endswith('.zip'):
+                            fpath = os.path.join(self.save_dir, fname)
+                            # Wait for file to finish downloading/writing
+                            try:
+                                size_before = os.path.getsize(fpath)
+                                time.sleep(1)
+                                size_after = os.path.getsize(fpath)
+                                if size_before != size_after or size_before == 0:
+                                    continue
+                            except:
+                                continue
+
+                            if fname not in self._processed:
+                                self.log_line.emit(f"📦 发现新压缩包: {fname}，正在解压...")
+                                extract_dir = os.path.join(self.save_dir, os.path.splitext(fname)[0])
+                                os.makedirs(extract_dir, exist_ok=True)
+                                
+                                try:
+                                    with zipfile.ZipFile(fpath, 'r') as zf:
+                                        zf.extractall(extract_dir)
+                                    
+                                    self._processed.append(fname)
+                                    self._save_processed()
+                                    
+                                    # Find all json files
+                                    found = []
+                                    for root, _, files in os.walk(extract_dir):
+                                        for f in files:
+                                            if f.lower().endswith('.json'):
+                                                found.append(os.path.join(root, f))
+                                                
+                                    if found:
+                                        self.found_jsons.emit(found)
+                                    else:
+                                        self.log_line.emit(f"⚠️ 解压完毕，但在 {fname} 中未找到任何 JSON 文件。")
+                                except zipfile.BadZipFile:
+                                    self.log_line.emit(f"❌ 压缩包损坏: {fname}")
+            except Exception as e:
+                pass
+            time.sleep(3)
+        self.log_line.emit("⏸ 自动监控已停止。")
+
+
 class MamApp(QMainWindow):
+    canva_log_sig = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MAM 素材溯源管理系统 v3.2.0")
@@ -711,13 +930,43 @@ class MamApp(QMainWindow):
         self._workers = []
         self._lib_data = []
         self._last_canva_id = None
+
+        self._canva_auto_worker = None
+        self._auto_monitor_processed_file = os.path.join(os.path.expanduser('~'), '.canva_tools_processed.json')
+
+        import queue
+        self._fast_bind_queue = queue.Queue()
+        try:
+            from mam_canvatools_server import app as flask_app
+            flask_app.config['FAST_BIND_QUEUE'] = self._fast_bind_queue
+        except: pass
+        
+        self._fast_bind_timer = QTimer(self)
+        self._fast_bind_timer.timeout.connect(self._check_fast_bind_queue)
+        self._fast_bind_timer.start(500)
+        
+        self._canva_auto_worker = None
+        self._auto_monitor_processed_file = os.path.join(os.path.expanduser('~'), '.canva_tools_processed.json')
+
         self._current_worker = None  # 当前后台 worker，用于发送进度信号
         self._code_table_dirty = False
         self._build_ui()
         log_bus.sig.connect(self._log)
+        self.canva_log_sig.connect(self._canva_append_log)
         self._log(f"🧭 诊断日志: {DIAG_LOG_FILE}")
         # 延迟连接数据库，避免窗口显示前卡住主线程
         QTimer.singleShot(200, self._init_db_connect)
+        # Auto-start CanvaTools if enabled
+        try:
+            import json
+            canvatools_config_file = os.path.join(os.path.expanduser('~'), '.canva_tools_config.json')
+            if os.path.exists(canvatools_config_file):
+                with open(canvatools_config_file, 'r', encoding='utf-8') as f:
+                    c_cfg = json.load(f)
+                    if c_cfg.get('autostart', False):
+                        QTimer.singleShot(1500, self._start_canva_server)
+        except: pass
+
         # exiftool 状态
         self._log(exiftool_status())
         # 检查 Python 依赖
@@ -729,6 +978,7 @@ class MamApp(QMainWindow):
         """窗口显示后在后台线程初始化连接，不阻塞 UI。"""
         self._log("⏳ 正在连接服务器获取Token...")
         w = Worker(lambda: db.connect())
+        w.setParent(self)
 
         def _on_db_init_done(result):
             ok, msg = result
@@ -795,6 +1045,7 @@ class MamApp(QMainWindow):
             ("成品封装", "🔒", self._tab_compose()),
             ("批量封装", "📁", self._tab_compose_batch()),
             ("Canva 模板", "🎨", self._tab_canva()),
+            ("CanvaTools", "🛠", self._tab_canvatools()),
             ("Canva批量", "🗃", self._tab_canva_batch()),
             ("溯源查询", "🔍", self._tab_query()),
             ("素材总览", "🗂", self._tab_library()),
@@ -846,8 +1097,15 @@ class MamApp(QMainWindow):
         log_l = QVBoxLayout(log_card)
         log_l.setContentsMargins(12, 10, 12, 10)
         log_l.setSpacing(8)
+        log_title_layout = QHBoxLayout()
         log_title = QLabel("运行日志")
         log_title.setObjectName("logTitle")
+        btn_open_log = QPushButton("打开日志目录")
+        btn_open_log.clicked.connect(self._open_log_dir)
+        btn_open_log.setStyleSheet("background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; padding: 2px 8px;")
+        log_title_layout.addWidget(log_title)
+        log_title_layout.addStretch(1)
+        log_title_layout.addWidget(btn_open_log)
         
         # 添加进度条
         self._progress = QProgressBar()
@@ -862,9 +1120,9 @@ class MamApp(QMainWindow):
         self._progress.hide()  # 默认隐藏，任务时显示
         
         self._log_box = TextEdit(); self._log_box.setReadOnly(True)
-        self._log_box.setMaximumHeight(150)
+        self._log_box.setMinimumHeight(200)
         self._log_box.setObjectName("logbox")
-        log_l.addWidget(log_title)
+        log_l.addLayout(log_title_layout)
         log_l.addWidget(self._progress)
         log_l.addWidget(self._log_box)
         right_l.addWidget(log_card)
@@ -902,6 +1160,10 @@ class MamApp(QMainWindow):
         self._canva_id_lbl.setText("(点击生成后显示)")
         self._btn_copy_canva.setEnabled(False)
         self._last_canva_id = None
+        
+        self._canva_auto_worker = None
+        self._auto_monitor_processed_file = os.path.join(os.path.expanduser('~'), '.canva_tools_processed.json')
+
 
     def _clear_compose_batch_inputs(self):
         if hasattr(self, '_drop_compose_batch'):
@@ -941,6 +1203,236 @@ class MamApp(QMainWindow):
         action.addWidget(btn, 1); action.addWidget(btn_clr)
         v.addLayout(action)
         return w
+
+
+
+    # ── Tab: CanvaTools ──────────────────────────────────
+    def _tab_canvatools(self):
+        w = QWidget(); layout = QVBoxLayout(w)
+        layout.setContentsMargins(14, 10, 14, 10); layout.setSpacing(10)
+        
+        instruction = QLabel('说明：打开软件点击启动服务即可驻留后台运行，直接在Canva内使用插件打包。')
+        instruction.setWordWrap(True)
+        instruction.setStyleSheet("color: #666; font-size: 13px;")
+        layout.addWidget(instruction)
+
+        # Config paths
+        self.canvatools_config_file = os.path.join(os.path.expanduser('~'), '.canva_tools_config.json')
+        self.canvatools_config = {}
+        if os.path.exists(self.canvatools_config_file):
+            try:
+                import json
+                with open(self.canvatools_config_file, 'r', encoding='utf-8') as f:
+                    self.canvatools_config = json.load(f)
+            except:
+                pass
+
+        # Canva App Bind Group
+        canva_group = QGroupBox("Canva 应用绑定")
+        canva_layout = QFormLayout()
+
+        self.canva_app_id_input = QLineEdit(self.canvatools_config.get('canva_app_id', ''))
+        self.canva_app_id_input.setPlaceholderText("例: AAFevuEFx08 （从 Canva 开发者后台复制）")
+        self.canva_app_id_input.setEchoMode(QLineEdit.EchoMode.Password)
+        canva_layout.addRow("App ID:", self.canva_app_id_input)
+
+        saved_app_id = self.canvatools_config.get('canva_app_id', '')
+        self.canva_bind_status_label = QLabel(
+            "✓ 已绑定（已隐藏）" if saved_app_id else "未绑定（入库请求将被拒绝）"
+        )
+        self.canva_bind_status_label.setStyleSheet("color: #388e3c;" if saved_app_id else "color: #d32f2f;")
+        canva_layout.addRow("状态:", self.canva_bind_status_label)
+
+        canva_btn_row = QHBoxLayout()
+        bind_btn = QPushButton("绑定应用")
+        bind_btn.clicked.connect(self._on_bind_canva_app)
+        canva_btn_row.addWidget(bind_btn)
+        
+        canva_btn_widget = QWidget()
+        canva_btn_widget.setLayout(canva_btn_row)
+        canva_layout.addRow("", canva_btn_widget)
+        canva_group.setLayout(canva_layout)
+        layout.addWidget(canva_group)
+
+        # Local Service Config
+        port_group = QGroupBox("本地服务配置")
+        port_layout = QFormLayout()
+        
+        saved_port = int(self.canvatools_config.get('port', '3001') or 3001)
+        self.port_backend = QLineEdit(str(saved_port))
+        port_layout.addRow("通信端口:", self.port_backend)
+        
+        default_desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        saved_path = self.canvatools_config.get('save_path', default_desktop)
+        self.save_path_input = QLineEdit(saved_path)
+        self.save_path_input.textChanged.connect(self._save_canva_config)
+        browse_btn = QPushButton("浏览...")
+        browse_btn.clicked.connect(self._on_browse_canva_save_path)
+        
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(self.save_path_input)
+        path_layout.addWidget(browse_btn)
+        
+        port_layout.addRow("自动保存路径:", path_layout)
+        port_group.setLayout(port_layout)
+        layout.addWidget(port_group)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        self.start_canva_btn = QPushButton('▶ 启动服务')
+        self.start_canva_btn.setMinimumHeight(40)
+        self.start_canva_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; border-radius: 6px;")
+        self.start_canva_btn.clicked.connect(self._start_canva_server)
+        btn_layout.addWidget(self.start_canva_btn)
+
+        self.stop_canva_btn = QPushButton('⏹ 停止服务')
+        self.stop_canva_btn.setMinimumHeight(40)
+        self.stop_canva_btn.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold; border-radius: 6px;")
+        self.stop_canva_btn.clicked.connect(self._stop_canva_server)
+        self.stop_canva_btn.setEnabled(False)
+        btn_layout.addWidget(self.stop_canva_btn)
+
+        layout.addLayout(btn_layout)
+        
+        # Additional settings
+        settings_group = QGroupBox("高级与自动化")
+        settings_layout = QVBoxLayout()
+        
+        self._chk_canva_autostart = QCheckBox("随系统自动启动服务")
+        is_autostart = self.canvatools_config.get('autostart', False)
+        self._chk_canva_autostart.setChecked(is_autostart)
+        self._chk_canva_autostart.toggled.connect(lambda: self._save_canva_config())
+        settings_layout.addWidget(self._chk_canva_autostart)
+        
+        self._chk_canva_hashmode = QCheckBox("启用极速纯哈希登记模式 (不导出打包)")
+        is_hashmode = self.canvatools_config.get('hash_only_mode', False)
+        self._chk_canva_hashmode.setChecked(is_hashmode)
+        self._chk_canva_hashmode.toggled.connect(lambda: self._save_canva_config())
+        settings_layout.addWidget(self._chk_canva_hashmode)
+        
+        settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
+
+        layout.addStretch(1)
+
+        self.werkzeug_server = None
+        self._canva_server_thread = None
+
+        return w
+
+    def _canva_append_log(self, text):
+        self._log(f"[CanvaTools] {text}")
+
+    def _save_canva_config(self):
+        try:
+            self.canvatools_config = {
+                'port': self.port_backend.text().strip(),
+                'canva_app_id': self.canva_app_id_input.text().strip(),
+                'save_path': self.save_path_input.text().strip(),
+                'autostart': getattr(self, '_chk_canva_autostart', None) is not None and self._chk_canva_autostart.isChecked(),
+                'hash_only_mode': getattr(self, '_chk_canva_hashmode', None) is not None and self._chk_canva_hashmode.isChecked(),
+            }
+            import json
+            with open(self.canvatools_config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.canvatools_config, f, ensure_ascii=False, indent=2)
+            os.environ['STANDALONE_SAVE_PATH'] = self.canvatools_config['save_path']
+        except Exception as e:
+            pass
+
+    def _on_bind_canva_app(self):
+        app_id = self.canva_app_id_input.text().strip()
+        if not app_id:
+            self.canva_bind_status_label.setText("请先填写 App ID")
+            self.canva_bind_status_label.setStyleSheet("color: #d32f2f;")
+            return
+        self._save_canva_config()
+        self.canva_bind_status_label.setText("✓ 已绑定（已隐藏）")
+        self.canva_bind_status_label.setStyleSheet("color: #388e3c;")
+        self.canva_log_sig.emit("[*] Canva App 已绑定。")
+        QMessageBox.information(self, "绑定成功", "已成功绑定 Canva App。服务器将仅接受来自该 App 的入库请求。")
+
+    def _on_browse_canva_save_path(self):
+        dir_path = QFileDialog.getExistingDirectory(self, "选择打包保存目录", self.save_path_input.text())
+        if dir_path:
+            self.save_path_input.setText(dir_path)
+            self._save_canva_config()
+
+    def _check_port_in_use(self, port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('localhost', port)) == 0
+
+    def _start_canva_server(self):
+        if flask_app is None:
+            detail = SERVER_IMPORT_ERROR or "未知错误"
+            QMessageBox.critical(self, "错误", f"后端模块加载失败。\n\n详细原因: {detail}")
+            return
+
+        try:
+            port = int(self.port_backend.text())
+        except ValueError:
+            QMessageBox.warning(self, "错误", "端口必须为数字！")
+            return
+            
+        if self._check_port_in_use(port):
+            QMessageBox.warning(self, "端口冲突", f"端口 {port} 已被占用，请修改！")
+            return
+            
+        self._save_canva_config()
+        self.start_canva_btn.setEnabled(False)
+        self.start_canva_btn.setText(f"● 运行中 (端口: {port})")
+        self.start_canva_btn.setStyleSheet("background-color: #2E7D32; color: white; border-radius: 6px;")
+        self.stop_canva_btn.setEnabled(True)
+        self.port_backend.setEnabled(False)
+
+        self.canva_log_sig.emit(f"[*] 准备启动 CanvaTools 服务...")
+
+        self._canva_server_thread = threading.Thread(target=self._run_canva_flask, args=(port,), daemon=True)
+        self._canva_server_thread.start()
+
+    def _run_canva_flask(self, port):
+        import builtins
+        # Redirect prints to our log_sig
+        class RedirectStd:
+            def write(self_, text):
+                if text.strip(): self.canva_log_sig.emit(text.strip())
+            def flush(self_): pass
+        
+        old_stdout = sys.stdout
+        sys.stdout = RedirectStd()
+        
+        try:
+            os.environ['STANDALONE_APP_ID'] = self.canva_app_id_input.text().strip()
+            os.environ['STANDALONE_PORT'] = str(port)
+            os.environ['STANDALONE_SAVE_PATH'] = self.save_path_input.text().strip()
+            
+            self.werkzeug_server = make_server('0.0.0.0', port, flask_app, threaded=True)
+            self.canva_log_sig.emit(f"[*] 服务已成功启动于 http://localhost:{port}")
+            self.canva_log_sig.emit(f"[*] Canva 插件的 Development URL 请换成此地址。")
+            self.werkzeug_server.serve_forever()
+        except Exception as e:
+            self.canva_log_sig.emit(f"[!] 运行异常: {e}")
+        finally:
+            sys.stdout = old_stdout
+
+    def _stop_canva_server(self):
+        if self.werkzeug_server:
+            def shutdown_task(srv):
+                try: srv.shutdown()
+                except: pass
+            threading.Thread(target=shutdown_task, args=(self.werkzeug_server,), daemon=True).start()
+            self.werkzeug_server = None
+
+        self.start_canva_btn.setEnabled(True)
+        self.start_canva_btn.setText("▶ 启动服务")
+        self.start_canva_btn.setStyleSheet("background-color: #4CAF50; color: white; border-radius: 6px;")
+        self.stop_canva_btn.setEnabled(False)
+        self.port_backend.setEnabled(True)
+        self.canva_log_sig.emit("[*] 服务已停止。")
+
+    def closeEvent(self, event):
+        if getattr(self, 'werkzeug_server', None):
+            self._stop_canva_server()
+        super().closeEvent(event)
 
     # ── Tab2：衍生关联 ──────────────────────────────────
     def _tab_derive(self):
@@ -1248,7 +1740,7 @@ class MamApp(QMainWindow):
         v.addWidget(QLabel("拖入“图片生成视频记录.json”进行批量自动登记并建立衍生关联。"))
         
         # 拖拽区
-        self._drop_derive_batch = JSONDropArea("拖入 JSON 文件")
+        self._drop_derive_batch = JSONDropArea("拖入 JSON 文件或文件夹")
         v.addWidget(self._drop_derive_batch)
         
         # 按钮区
@@ -1257,7 +1749,7 @@ class MamApp(QMainWindow):
         btn_browse = PushButton("📁  浏览选择文件")
         btn_browse.setStyleSheet("background:#95a5a6;color:#fff;height:42px;font-size:14px;border:none;border-radius:9px;")
         def _browse():
-            fp, _ = QFileDialog.getOpenFileName(self, "选择JSON记录", "", "JSON Files (*.json)")
+            fp, _ = QFileDialog.getOpenFileName(self, "选择JSON记录", "", "JSON Files (*.json)") # For folders, use drag and drop
             if fp:
                 from PyQt6.QtCore import QUrl
                 class MockMime:
@@ -1274,29 +1766,135 @@ class MamApp(QMainWindow):
         btn_action.addWidget(btn_browse)
         btn_action.addWidget(btn_start)
         v.addLayout(btn_action)
+
+        self._chk_auto_monitor = QCheckBox("自动检测 Canva 导出目录并解压登记")
+        self._chk_auto_monitor.setStyleSheet("color: #2c3e50; font-size: 14px; font-weight: bold; margin-top: 10px;")
+        
+        # Load state from config
+        is_auto_checked = self._cfg.get('canva_auto_monitor', False)
+        self._chk_auto_monitor.setChecked(is_auto_checked)
+        self._chk_auto_monitor.toggled.connect(self._toggle_auto_monitor)
+        
+        v.addWidget(self._chk_auto_monitor)
+        
+        # Start monitoring if it was checked
+        if is_auto_checked:
+            QTimer.singleShot(500, lambda: self._toggle_auto_monitor(True))
+
         v.addStretch(1)
         return w
+
+
+    def _toggle_auto_monitor(self, checked):
+        self._cfg['canva_auto_monitor'] = checked
+        save_config(self._cfg)
+        
+        if checked:
+            # Start worker
+            if self._canva_auto_worker is None or not self._canva_auto_worker.isRunning():
+                # Read save path from canva tools config
+                import json
+                save_dir = os.path.join(os.path.expanduser('~'), 'Desktop')
+                canvatools_config_file = os.path.join(os.path.expanduser('~'), '.canva_tools_config.json')
+                if os.path.exists(canvatools_config_file):
+                    try:
+                        with open(canvatools_config_file, 'r', encoding='utf-8') as f:
+                            c_cfg = json.load(f)
+                            save_dir = c_cfg.get('save_path', save_dir)
+                    except: pass
+                
+                self._canva_auto_worker = CanvaAutoMonitorWorker(save_dir, self._auto_monitor_processed_file)
+                self._canva_auto_worker.setParent(self)
+                self._canva_auto_worker.log_line.connect(self._log)
+                self._canva_auto_worker.found_jsons.connect(self._on_canva_auto_found_jsons)
+                self._canva_auto_worker.start()
+        else:
+            if self._canva_auto_worker:
+                self._canva_auto_worker.stop()
+                
+                self._canva_auto_worker = None
+
+    def _on_canva_auto_found_jsons(self, json_paths):
+        if self._current_worker is not None:
+            self._log("⏳ 当前有正在执行的后台任务，自动监控触发的批量衍生将放弃本次请求，下次检测会再次尝试。")
+            return
+            
+        self._log(f"🎬 自动解压完毕，自动触发批量衍生导入 (共 {len(json_paths)} 个JSON)...")
+        
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
+        self._progress.show()
+        w = BatchDeriveWorker(json_paths, self._cfg.get('user_name', 'System'))
+        w.setParent(self)
+
+        def _on_prog(total, done, success, failed):
+            if total > 0:
+                self._progress.setValue(int(done * 100 / total))
+                self._progress.setFormat(f"已处理: {done}/{total} [成功:{success} 失败:{failed}]")
+
+        def _on_fin(res):
+            self._progress.hide()
+            self._clear_derive_batch_inputs()
+            if w in self._workers:
+                self._workers.remove(w)
+            self._current_worker = None
+            msg = f"🎉 自动监控衍生处理完成！\n总数：{res['total']}，成功：{res['success']}，失败：{res['failed']}"
+            self._log(msg)
+
+        w.log_line.connect(self._log)
+        w.progress.connect(_on_prog)
+        w.finished.connect(_on_fin)
+        
+        self._workers.append(w)
+        self._current_worker = w
+        w.start()
+
+
+
+    def _check_fast_bind_queue(self):
+        if self._current_worker is not None: return
+        
+        try:
+            data = self._fast_bind_queue.get_nowait()
+        except queue.Empty:
+            return
+
+        w = FastBindWorker(data, self._cfg.get('user_name', 'System'))
+        w.setParent(self)
+        
+        def _on_fin(res):
+            if w in self._workers:
+                self._workers.remove(w)
+            self._current_worker = None
+
+        w.log_line.connect(self._log)
+        w.finished.connect(_on_fin)
+        
+        self._workers.append(w)
+        self._current_worker = w
+        w.start()
 
     def _do_derive_batch(self):
         if self._current_worker is not None:
             QMessageBox.warning(self, "提示", "当前有后台任务正在进行，请稍候。")
             return
             
-        fp = self._drop_derive_batch.file()
-        if not fp or not fp.lower().endswith(".json"):
-            QMessageBox.critical(self, "错误", "请先拖入一个有效的 JSON 记录文件！")
+        fps = self._drop_derive_batch.files()
+        if not fps:
+            QMessageBox.critical(self, "错误", "请先拖入 JSON 文件或包含 JSON 的文件夹！")
             return
 
         btn = self.sender()
         btn.setEnabled(False)
         btn.setText("⏳ 正在处理...")
-        self._log("🎬 开始通过 JSON 批量衍生导入...")
+        self._log(f"🎬 开始通过 JSON 批量衍生导入 (共 {len(fps)} 个文件)...")
         
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
         self._progress.show()
 
-        w = BatchDeriveWorker(fp, self._cfg.get('user_name', 'System'))
+        w = BatchDeriveWorker(fps, self._cfg.get('user_name', 'System'))
+        w.setParent(self)
 
         def _on_prog(total, done, success, failed):
             if total > 0:
@@ -1489,7 +2087,52 @@ class MamApp(QMainWindow):
         if self._current_worker:
             self._current_worker.progress.emit(percent)
 
+
+    def _open_log_dir(self):
+        log_dir = os.path.join(os.path.expanduser('~'), '.mam_logs')
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        import subprocess
+        if os.name == 'nt':
+            subprocess.Popen(['explorer', log_dir])
+
+    def _write_daily_log(self, msg):
+        import json
+        import datetime
+        from threading import Thread
+        
+        def _write():
+            log_dir = os.path.join(os.path.expanduser('~'), '.mam_logs')
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            
+            # Clean up logs older than 15 days
+            try:
+                now = datetime.datetime.now()
+                for fname in os.listdir(log_dir):
+                    if fname.startswith("mam_log_") and fname.endswith(".json"):
+                        fpath = os.path.join(log_dir, fname)
+                        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(fpath))
+                        if (now - mtime).days > 15:
+                            os.remove(fpath)
+            except: pass
+
+            today = datetime.datetime.now().strftime("%Y-%m-%d")
+            time_str = datetime.datetime.now().strftime("%H:%M:%S")
+            log_file = os.path.join(log_dir, f"mam_log_{today}.json")
+            
+            entry = {"time": time_str, "msg": msg}
+            line = json.dumps(entry, ensure_ascii=False) + "\n"
+            
+            try:
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(line)
+            except: pass
+            
+        Thread(target=_write, daemon=True).start()
+
     def _log(self, msg):
+        self._write_daily_log(msg)
         self._log_box.append(f"[{datetime.now().strftime('%H:%M:%S')}]  {msg}")
         _append_diag_log(msg)
 
@@ -2991,6 +3634,7 @@ class MamApp(QMainWindow):
                 progress.setValue(0)
 
                 _conn_worker = Worker(lambda: db.connect())
+                _conn_worker.setParent(self)
 
                 def _on_conn_done(result, _u=user_name):
                     progress.close()
