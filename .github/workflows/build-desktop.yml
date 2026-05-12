@@ -133,7 +133,7 @@ jobs:
             "--collect-all", "PyQt6",
             "--collect-all", "cv2",
             "--collect-all", "imagehash",
-            "--hidden-import", "pymysql",
+            "--hidden-import", "requests",
             "--hidden-import", "piexif",
             "--hidden-import", "mutagen.mp4"
           )
@@ -165,7 +165,7 @@ jobs:
             --collect-all PyQt6 \
             --collect-all cv2 \
             --collect-all imagehash \
-            --hidden-import pymysql \
+            --hidden-import requests \
             --hidden-import piexif \
             --hidden-import mutagen.mp4 \
             "${ICON_ARGS[@]}" \

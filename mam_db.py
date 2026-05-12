@@ -47,7 +47,7 @@ class DBManager:
                     return json.load(open(p, 'r', encoding='utf-8'))
                 except:
                     pass
-        return {"host": "https://api.mediahashdezd.online", "user": "admin", "password": ""}
+        return {"host": "", "user": "", "password": ""}
 
     def save_conf(self, conf):
         self.conf = conf
@@ -56,7 +56,7 @@ class DBManager:
 
     @property
     def base_url(self):
-        return self.conf.get("host", "https://api.mediahashdezd.online").rstrip('/')
+        return self.conf.get("host", "").rstrip('/')
 
     def connect(self, init_tables=True, warm_cache=True):
         url = f"{self.base_url}/auth/login"

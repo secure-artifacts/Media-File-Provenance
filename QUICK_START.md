@@ -3,9 +3,8 @@
 ## ⚡ 快速检查清单
 
 - [ ] Python 3.8+ 已安装
-- [ ] 依赖已安装: `pip install PyQt6 opencv-python pymysql pillow`
-- [ ] MySQL 服务已启动
-- [ ] 数据库名: `mam_system` 已创建
+- [ ] 源码目录存在
+- [ ] 依赖已安装: `pip install PyQt6 opencv-python requests pillow`
 
 ---
 
@@ -16,10 +15,18 @@ cd "c:\Users\newnew\Desktop\素材管理"
 python mam_gui.py
 ```
 
-首次运行时会自动：
-1. 创建本地配置文件 (`mam_config.json`, `mam_db_config.json`)
-2. 连接 MySQL
-3. 创建三个关键表
+1. 运行 `python mam_gui.py` 启动软件。
+2. 首次启动会自动要求连接中心服务器。
+
+---
+
+## ⚙️ 初始设置
+
+1. 点击左侧底部 **"系统设置"**。
+2. 填写 **操作员姓名**（如"张三"）。
+3. 确认服务器配置无误（通常留空或使用默认提供的远端API地址）。
+4. 点击 **"OK"** 保存。
+5. 等待系统显示"服务器连接成功"。
 
 ---
 
@@ -182,9 +189,9 @@ target: VIDEO_OUT_20260310.mp4 (hash: x9y8z7w6...)
 
 2. 可以修改:
    - **审计员姓名**: 你的名字 (会显示在所有操作记录中)
-   - **MySQL 地址**: 数据库服务器 (默认localhost)
-   - **MySQL 密码**: 数据库密码
-   - **数据库名**: 库名 (默认 mam_system)
+   - **API 地址**: 服务器接口地址 (默认 https://api.mediahashdezd.online)
+   - **API 用户名**: 登录账户
+   - **API 密码**: 登录密码
 
 3. 点击 **"Ok"** 保存
 
@@ -211,31 +218,22 @@ target: VIDEO_OUT_20260310.mp4 (hash: x9y8z7w6...)
 
 所有记录保存到:
 - **配置**: `mam_config.json` (你的用户名)
-- **数据库配置**: `mam_db_config.json` (MySQL连接信息)
-- **MySQL数据库**: 三个核心表
-  - `assets`: 所有素材记录
-  - `asset_relations_11`: 一对一关联 (修改链)
-  - `asset_relations_nm`: 一对多关联 (成品链)
+- **服务器配置**: `mam_db_config.json` (API连接信息)
+- **远端数据库**: 云端服务端存储所有数据
 
 ---
 
 ## ⚠️ 故障排查
 
-### 问题: "❌ 数据库警告: ..."
+### 问题: "❌ 服务器警告: ..."
 
-**原因**: MySQL连接失败
+**原因**: API 服务器连接失败
 
 **解决**:
-1. 确保 MySQL 服务已启动
+1. 确保服务器网络畅通
 2. 打开"⚙️ 系统设置"检查:
-   - MySQL 地址是否正确 (如果本机用 localhost)
-   - 密码是否正确
-   - 数据库名 `mam_system` 是否存在
-
-```sql
--- 如果数据库不存在，在MySQL中执行：
-CREATE DATABASE mam_system CHARACTER SET utf8mb4;
-```
+   - API 地址是否正确
+   - 用户名密码是否正确
 
 ### 问题: 拖入文件后没有显示预览
 

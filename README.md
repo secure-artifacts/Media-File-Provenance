@@ -73,7 +73,6 @@ python mam_gui.py
 ## 环境要求
 
 - **Python**: 3.10+
-- **数据库**: MySQL 5.7 / 8.x
 - **系统**: Windows / macOS / Linux
 - **exiftool**: （源码运行建议本机安装，预编译版已内置）
 
@@ -83,15 +82,7 @@ python mam_gui.py
 pip install -r requirements.txt
 ```
 
-主要依赖：PyQt6、opencv-python、numpy、pymysql、Pillow、ImageHash、piexif、mutagen。
-
-### 数据库准备
-
-```sql
-CREATE DATABASE mam_system CHARACTER SET utf8mb4;
-```
-
-程序首次连接数据库时会自动创建所需表结构。
+主要依赖：PyQt6、opencv-python、numpy、requests、Pillow、ImageHash、piexif、mutagen。
 
 ## 启动软件
 
@@ -168,6 +159,8 @@ python mam_gui.py
 系统记录所有组件与成品的对应关系
 
 ---
+
+
 
 ### 📋 Canva 模板关联
 
