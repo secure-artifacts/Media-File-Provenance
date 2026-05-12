@@ -128,12 +128,33 @@ class DBManager:
 
     def upsert_assets_bulk(self, rows):
         if not self.conn or not rows: return 0
-        success = 0
+        url = f"{self.base_url}/assets/bulk-upsert"
+        payload = []
         for r in rows:
             phash, fname, atype, fsize, producer, created_at, metadata_json, thumb = r
-            if self.upsert_asset(phash, fname, atype, fsize, producer, created_at, metadata_json, thumb):
-                success += 1
-        return success
+            item = {
+                "phash": phash,
+                "filename": fname,
+                "asset_type": atype,
+                "file_size": fsize,
+                "producer": producer,
+                "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
+                "metadata_json": json.loads(metadata_json) if isinstance(metadata_json, str) else metadata_json,
+            }
+            if thumb:
+                item["thumbnail_base64"] = base64.b64encode(thumb).decode('utf-8')
+            payload.append(item)
+            
+        try:
+            r = self._session.post(url, json=payload, timeout=30)
+            if r.status_code in (200, 201):
+                if self._phash_cache is not None:
+                    for p in payload:
+                        self._phash_cache.add(p["phash"])
+                return len(payload)
+            return 0
+        except:
+            return 0
 
     def fill_asset_producer_if_missing(self, phash, producer):
         if not self.conn or not phash or not producer: return False
