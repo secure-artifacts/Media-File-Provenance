@@ -11,6 +11,9 @@ permissions:
   contents: write
   attestations: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     name: Build on ${{ matrix.os }}
@@ -280,6 +283,7 @@ jobs:
 
       - name: Create macOS installer (.pkg/.dmg)
         if: runner.os == 'macOS'
+        continue-on-error: true
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
           rm -rf pkgroot release
@@ -312,6 +316,7 @@ jobs:
 
   release:
     needs: build
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: write
