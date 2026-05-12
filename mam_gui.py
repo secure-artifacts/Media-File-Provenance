@@ -3248,15 +3248,18 @@ class MamApp(QMainWindow):
             if not ok:
                 raise RuntimeError(msg)
 
-            with worker_db.conn.cursor() as cur:
-                cur.execute("DELETE FROM producer_codes")
-                if codes:
-                    cur.executemany(
-                        "INSERT INTO producer_codes (code, name) VALUES (%s, %s)",
-                        [(c, n) for c, n in codes.items()]
-                    )
+            # 获取所有现有的代码并删除
+            existing = worker_db.get_producer_codes()
+            for code in existing.keys():
+                worker_db.delete_producer_code(code)
+            
+            # 插入新的代码
+            for c, n in codes.items():
+                worker_db.upsert_producer_code(c, n)
 
             save_producer_codes(codes)  # JSON 备份
+            worker_db.close()
+            return len(codes)
             worker_db.close()
             return len(codes)
 
