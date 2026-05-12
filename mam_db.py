@@ -79,6 +79,16 @@ class DBManager:
         except Exception as e:
             return False, f"连接异常: {str(e)}"
 
+    def clone_auth(self, other_db):
+        """克隆鉴权状态，避免多线程任务频繁重新登录 API"""
+        if other_db.token and other_db.conn:
+            self.conf = dict(other_db.conf)
+            self.token = other_db.token
+            self._session.headers.update({"Authorization": f"Bearer {self.token}"})
+            self.conn = True
+            return True
+        return False
+
     def close(self):
         self.conn = None
         self.token = None
@@ -243,28 +253,35 @@ class DBManager:
             prepared.append(t)
         return prepared
 
-    def _get_cached_derive_up(self, phash, local_cache=None):
+    def _get_cached_derive_up(self, phash, local_cache=None, asset_cache=None):
         if not phash: return []
-        if local_cache is None: return self._get_derive_chain_up(phash)
+        if local_cache is None: return self._get_derive_chain_up(phash, asset_cache=asset_cache)
         cache = local_cache.setdefault('derive_up', {})
-        if phash not in cache: cache[phash] = self._get_derive_chain_up(phash)
+        if phash not in cache: cache[phash] = self._get_derive_chain_up(phash, asset_cache=asset_cache)
         return cache[phash]
 
-    def _get_cached_derive_down(self, phash, local_cache=None):
+    def _get_cached_derive_down(self, phash, local_cache=None, asset_cache=None):
         if not phash: return []
-        if local_cache is None: return self._get_derive_chain_down(phash)
+        if local_cache is None: return self._get_derive_chain_down(phash, asset_cache=asset_cache)
         cache = local_cache.setdefault('derive_down', {})
-        if phash not in cache: cache[phash] = self._get_derive_chain_down(phash)
+        if phash not in cache: cache[phash] = self._get_derive_chain_down(phash, asset_cache=asset_cache)
         return cache[phash]
 
-    def _get_cached_compose(self, phash, local_cache=None):
+    def _get_cached_compose(self, phash, local_cache=None, asset_cache=None):
         if not phash: return []
-        if local_cache is None: return self._get_compose_tree(phash)
+        if local_cache is None: return self._get_compose_tree(phash, asset_cache=asset_cache)
         cache = local_cache.setdefault('compose', {})
-        if phash not in cache: cache[phash] = self._get_compose_tree(phash, local_cache=local_cache)
+        if phash not in cache: cache[phash] = self._get_compose_tree(phash, local_cache=local_cache, asset_cache=asset_cache)
         return cache[phash]
 
-    def _get_derive_chain_up(self, phash, visited=None, depth=0, max_depth=8):
+    def _bulk_fetch_missing_assets(self, phashes, asset_cache):
+        if asset_cache is None: return
+        missing = [p for p in phashes if p and p not in asset_cache]
+        if missing:
+            fetched = self.get_assets_by_phashes(missing)
+            asset_cache.update(fetched)
+
+    def _get_derive_chain_up(self, phash, visited=None, depth=0, max_depth=8, asset_cache=None):
         if visited is None: visited = set()
         if phash in visited or depth >= max_depth: return []
         visited.add(phash)
@@ -273,22 +290,32 @@ class DBManager:
             r = self._session.get(f"{self.base_url}/rel-derive", params={"dst_phash": phash, "limit": 100})
             if r.status_code == 200:
                 items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
+                
+                if asset_cache is not None:
+                    self._bulk_fetch_missing_assets([rel.get("src_phash") for rel in items], asset_cache)
+                    
                 for rel in items:
                     src = rel.get("src_phash")
-                    ar = self._session.get(f"{self.base_url}/assets/{src}")
-                    if ar.status_code == 200:
-                        a = ar.json()
-                        row = {
-                            "src_phash": src, "rel_type": rel.get("rel_type"), "operator": rel.get("operator"),
-                            "filename": a.get("filename"), "producer": a.get("producer"),
-                            "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
-                        }
-                        row['ancestors'] = self._get_derive_chain_up(src, visited, depth + 1, max_depth)
-                        rows.append(row)
+                    if asset_cache is not None and src in asset_cache:
+                        a = asset_cache[src]
+                    else:
+                        ar = self._session.get(f"{self.base_url}/assets/{src}")
+                        if ar.status_code == 200:
+                            a = ar.json()
+                        else:
+                            continue
+                            
+                    row = {
+                        "src_phash": src, "rel_type": rel.get("rel_type"), "operator": rel.get("operator"),
+                        "filename": a.get("filename"), "producer": a.get("producer"),
+                        "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                    }
+                    row['ancestors'] = self._get_derive_chain_up(src, visited, depth + 1, max_depth, asset_cache)
+                    rows.append(row)
         except: pass
         return rows
 
-    def _get_derive_chain_down(self, phash, visited=None, depth=0, max_depth=8):
+    def _get_derive_chain_down(self, phash, visited=None, depth=0, max_depth=8, asset_cache=None):
         if visited is None: visited = set()
         if phash in visited or depth >= max_depth: return []
         visited.add(phash)
@@ -297,22 +324,32 @@ class DBManager:
             r = self._session.get(f"{self.base_url}/rel-derive", params={"src_phash": phash, "limit": 100})
             if r.status_code == 200:
                 items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
+                
+                if asset_cache is not None:
+                    self._bulk_fetch_missing_assets([rel.get("dst_phash") for rel in items], asset_cache)
+                    
                 for rel in items:
                     dst = rel.get("dst_phash")
-                    ar = self._session.get(f"{self.base_url}/assets/{dst}")
-                    if ar.status_code == 200:
-                        a = ar.json()
-                        row = {
-                            "dst_phash": dst, "rel_type": rel.get("rel_type"), "operator": rel.get("operator"),
-                            "filename": a.get("filename"), "producer": a.get("producer"),
-                            "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
-                        }
-                        row['descendants'] = self._get_derive_chain_down(dst, visited, depth + 1, max_depth)
-                        rows.append(row)
+                    if asset_cache is not None and dst in asset_cache:
+                        a = asset_cache[dst]
+                    else:
+                        ar = self._session.get(f"{self.base_url}/assets/{dst}")
+                        if ar.status_code == 200:
+                            a = ar.json()
+                        else:
+                            continue
+                            
+                    row = {
+                        "dst_phash": dst, "rel_type": rel.get("rel_type"), "operator": rel.get("operator"),
+                        "filename": a.get("filename"), "producer": a.get("producer"),
+                        "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                    }
+                    row['descendants'] = self._get_derive_chain_down(dst, visited, depth + 1, max_depth, asset_cache)
+                    rows.append(row)
         except: pass
         return rows
 
-    def _get_compose_tree(self, phash, visited=None, depth=0, max_depth=6, local_cache=None):
+    def _get_compose_tree(self, phash, visited=None, depth=0, max_depth=6, local_cache=None, asset_cache=None):
         if visited is None: visited = set()
         if phash in visited or depth >= max_depth: return []
         visited.add(phash)
@@ -321,19 +358,29 @@ class DBManager:
             r = self._session.get(f"{self.base_url}/rel-compose", params={"product_phash": phash, "limit": 100})
             if r.status_code == 200:
                 items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
+                
+                if asset_cache is not None:
+                    self._bulk_fetch_missing_assets([rel.get("part_phash") for rel in items], asset_cache)
+                    
                 for rel in sorted(items, key=lambda x: x.get('part_order', 0)):
                     part = rel.get("part_phash")
-                    ar = self._session.get(f"{self.base_url}/assets/{part}")
-                    if ar.status_code == 200:
-                        a = ar.json()
-                        row = {
-                            "part_phash": part, "part_role": rel.get("part_role"), "part_order": rel.get("part_order"),
-                            "filename": a.get("filename"), "producer": a.get("producer"),
-                            "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
-                        }
-                        row['ancestors'] = self._get_cached_derive_up(part, local_cache)
-                        row['sub_parts'] = self._get_compose_tree(part, visited.copy(), depth + 1, max_depth, local_cache)
-                        rows.append(row)
+                    if asset_cache is not None and part in asset_cache:
+                        a = asset_cache[part]
+                    else:
+                        ar = self._session.get(f"{self.base_url}/assets/{part}")
+                        if ar.status_code == 200:
+                            a = ar.json()
+                        else:
+                            continue
+                            
+                    row = {
+                        "part_phash": part, "part_role": rel.get("part_role"), "part_order": rel.get("part_order"),
+                        "filename": a.get("filename"), "producer": a.get("producer"),
+                        "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                    }
+                    row['ancestors'] = self._get_cached_derive_up(part, local_cache, asset_cache=asset_cache)
+                    row['sub_parts'] = self._get_compose_tree(part, visited.copy(), depth + 1, max_depth, local_cache, asset_cache=asset_cache)
+                    rows.append(row)
         except: pass
         return rows
 
@@ -350,7 +397,7 @@ class DBManager:
             self._collect_derive_src_phashes(row.get('ancestors', []), out_set)
             self._collect_compose_part_phashes(row.get('sub_parts', []), out_set)
 
-    def _build_canva_assets_lineage(self, phash_list, local_cache=None, template_assets_cache=None, template_cache_lock=None):
+    def _build_canva_assets_lineage(self, phash_list, local_cache=None, template_assets_cache=None, template_cache_lock=None, asset_cache=None):
         if not self.conn: return []
         cache_key = tuple(phash_list or [])
         if template_assets_cache is not None:
@@ -360,14 +407,19 @@ class DBManager:
                 cached = template_assets_cache.get(cache_key)
             if cached is not None: return cached
 
-        base_map = self.get_assets_by_phashes(phash_list)
+        if asset_cache is not None:
+            self._bulk_fetch_missing_assets(phash_list, asset_cache)
+            base_map = asset_cache
+        else:
+            base_map = self.get_assets_by_phashes(phash_list)
+            
         assets = []
         for ph in phash_list or []:
             asset = base_map.get(ph)
             if not asset: continue
             node = dict(asset)
-            node['ancestors'] = self._get_cached_derive_up(ph, local_cache)
-            node['composed_from'] = self._get_cached_compose(ph, local_cache)
+            node['ancestors'] = self._get_cached_derive_up(ph, local_cache, asset_cache=asset_cache)
+            node['composed_from'] = self._get_cached_compose(ph, local_cache, asset_cache=asset_cache)
             assets.append(node)
             
         if template_assets_cache is not None:
@@ -377,32 +429,39 @@ class DBManager:
                 template_assets_cache[cache_key] = assets
         return assets
 
-    def _build_lineage_from_base(self, base, canva_templates=None, local_cache=None, canva_assets_cache=None, canva_cache_lock=None):
+    def _build_lineage_from_base(self, base, canva_templates=None, local_cache=None, canva_assets_cache=None, canva_cache_lock=None, asset_cache=None):
         exact = base['phash']
         result = {
             "asset": base, "derived_from": [], "derived_to": [], "composed_from":[], "used_in": [], "canva_used": []
         }
-        result["derived_from"] = self._get_cached_derive_up(exact, local_cache)
+        result["derived_from"] = self._get_cached_derive_up(exact, local_cache, asset_cache=asset_cache)
         
         try:
             r = self._session.get(f"{self.base_url}/rel-derive", params={"src_phash": exact, "limit": 100})
             if r.status_code == 200:
                 items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
+                if asset_cache is not None:
+                    self._bulk_fetch_missing_assets([rel.get("dst_phash") for rel in items], asset_cache)
                 for rel in items:
                     dst = rel.get("dst_phash")
-                    ar = self._session.get(f"{self.base_url}/assets/{dst}")
-                    if ar.status_code == 200:
-                        a = ar.json()
-                        row = {
-                            "dst_phash": dst, "rel_type": rel.get("rel_type"), "operator": rel.get("operator"),
-                            "filename": a.get("filename"), "producer": a.get("producer"),
-                            "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
-                        }
-                        row['descendants'] = self._get_cached_derive_down(dst, local_cache)
-                        result["derived_to"].append(row)
+                    if asset_cache is not None and dst in asset_cache:
+                        a = asset_cache[dst]
+                    else:
+                        ar = self._session.get(f"{self.base_url}/assets/{dst}")
+                        if ar.status_code == 200:
+                            a = ar.json()
+                        else:
+                            continue
+                    row = {
+                        "dst_phash": dst, "rel_type": rel.get("rel_type"), "operator": rel.get("operator"),
+                        "filename": a.get("filename"), "producer": a.get("producer"),
+                        "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                    }
+                    row['descendants'] = self._get_cached_derive_down(dst, local_cache, asset_cache=asset_cache)
+                    result["derived_to"].append(row)
         except: pass
 
-        result["composed_from"] = self._get_cached_compose(exact, local_cache)
+        result["composed_from"] = self._get_cached_compose(exact, local_cache, asset_cache=asset_cache)
 
         canva_scope = {exact}
         self._collect_derive_src_phashes(result["derived_from"], canva_scope)
@@ -412,16 +471,23 @@ class DBManager:
             r = self._session.get(f"{self.base_url}/rel-compose", params={"part_phash": exact, "limit": 100})
             if r.status_code == 200:
                 items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
+                if asset_cache is not None:
+                    self._bulk_fetch_missing_assets([rel.get("product_phash") for rel in items], asset_cache)
                 for rel in items:
                     prod = rel.get("product_phash")
-                    ar = self._session.get(f"{self.base_url}/assets/{prod}")
-                    if ar.status_code == 200:
-                        a = ar.json()
-                        result["used_in"].append({
-                            "product_phash": prod, "part_role": rel.get("part_role"),
-                            "filename": a.get("filename"), "producer": a.get("producer"),
-                            "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
-                        })
+                    if asset_cache is not None and prod in asset_cache:
+                        a = asset_cache[prod]
+                    else:
+                        ar = self._session.get(f"{self.base_url}/assets/{prod}")
+                        if ar.status_code == 200:
+                            a = ar.json()
+                        else:
+                            continue
+                    result["used_in"].append({
+                        "product_phash": prod, "part_role": rel.get("part_role"),
+                        "filename": a.get("filename"), "producer": a.get("producer"),
+                        "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                    })
         except: pass
 
         tmpls = canva_templates if canva_templates is not None else self._prepare_canva_templates(self._fetch_canva_templates())
@@ -442,7 +508,8 @@ class DBManager:
             t['assets'] = self._build_canva_assets_lineage(
                 phashes, local_cache=local_cache,
                 template_assets_cache=canva_assets_cache,
-                template_cache_lock=canva_cache_lock
+                template_cache_lock=canva_cache_lock,
+                asset_cache=asset_cache
             )
             result["canva_used"].append(t)
         return result
@@ -463,7 +530,8 @@ class DBManager:
         if not base: return None
         templates = self._prepare_canva_templates(self._fetch_canva_templates())
         local_cache = {'derive_up': {}, 'derive_down': {}, 'compose': {}}
-        return self._build_lineage_from_base(base, templates, local_cache=local_cache)
+        asset_cache = {base['phash']: base}
+        return self._build_lineage_from_base(base, templates, local_cache=local_cache, asset_cache=asset_cache)
 
     def get_lineage_batch(self, phashes, exact_only=True, workers=4):
         if not self.conn: return {}
@@ -482,13 +550,16 @@ class DBManager:
         # 为避免 requests session 在多线程下的小概率问题，使用单线程按顺序处理，因为内部已有各种缓存优化。
         # 原版这里有 ThreadPoolExecutor，但 API 请求复用 session 可能会有影响，保守采用单线程。
         local_cache = {'derive_up': {}, 'derive_down': {}, 'compose': {}}
+        asset_cache = dict(base_map)
+        
         for ph in uniq:
             base = base_map.get(ph)
             if base:
                 out[ph] = self._build_lineage_from_base(
                     dict(base), canva_templates,
                     local_cache=local_cache,
-                    canva_assets_cache=canva_assets_cache
+                    canva_assets_cache=canva_assets_cache,
+                    asset_cache=asset_cache
                 )
             else:
                 out[ph] = None

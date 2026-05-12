@@ -468,10 +468,10 @@ class ScanWorker(QThread):
 
         # 扫描线程使用独立数据库连接，避免和 UI 操作共享连接导致卡顿
         scan_db = DBManager()
-        scan_db.conf = dict(db.conf)
-        ok, msg = scan_db.connect()
-        if not ok:
-            self.log_line.emit(f"❌ 扫描线程数据库连接失败: {msg}")
+        if not scan_db.clone_auth(db):
+            ok, msg = scan_db.connect()
+            if not ok:
+                self.log_line.emit(f"❌ 扫描线程 API 鉴权失败: {msg}")
             self.finished.emit({'total': total, 'added': 0, 'skipped': 0,
                                 'failed': total, 'canva_id': canva_id, 'stopped': False})
             return
@@ -640,10 +640,10 @@ class BatchDeriveWorker(QThread):
 
         # 使用外部已经导入的 DBManager 和 db
         thread_db = DBManager()
-        thread_db.conf = dict(db.conf)
-        ok, msg = thread_db.connect(init_tables=False, warm_cache=False)
-        if not ok:
-            self.log_line.emit(f"❌ 数据库连接失败: {msg}")
+        if not thread_db.clone_auth(db):
+            ok, msg = thread_db.connect(init_tables=False, warm_cache=False)
+            if not ok:
+                self.log_line.emit(f"❌ API 鉴权失败: {msg}")
             self.finished.emit({'total': total, 'done': 0, 'success': 0, 'failed': total})
             return
 
@@ -2671,12 +2671,12 @@ class MamApp(QMainWindow):
             if ph_list:
                 t_db_conn_start = time.perf_counter()
                 query_db = DBManager()
-                query_db.conf = dict(db.conf)
-                ok, msg = query_db.connect(init_tables=False, warm_cache=False)
-                if not ok:
-                    raise RuntimeError(msg)
+                if not query_db.clone_auth(db):
+                    ok, msg = query_db.connect(init_tables=False, warm_cache=False)
+                    if not ok:
+                        raise RuntimeError(msg)
                 t_db_conn_end = time.perf_counter()
-                gui_log(f"⏱️ SQL连接耗时: {t_db_conn_end - t_db_conn_start:.2f}s")
+                gui_log(f"⏱️ API复用/连接耗时: {t_db_conn_end - t_db_conn_start:.4f}s")
 
                 t_db_query_start = time.perf_counter()
                 try:
@@ -2688,11 +2688,11 @@ class MamApp(QMainWindow):
                 finally:
                     query_db.close()
                 t_db_query_end = time.perf_counter()
-                gui_log(f"⏱️ SQL批量溯源耗时: {t_db_query_end - t_db_query_start:.2f}s")
+                gui_log(f"⏱️ API批量溯源耗时: {t_db_query_end - t_db_query_start:.2f}s")
 
             t_db = time.perf_counter()
             gui_log(
-                f"⏱️ 查询阶段2/3 SQL溯源: {t_db - t_hash:.2f}s"
+                f"⏱️ 查询阶段2/3 API溯源: {t_db - t_hash:.2f}s"
                 f"（有效哈希 {len(ph_list)}，命中 {sum(1 for v in lineage_map.values() if v)}）"
             )
 
@@ -3243,10 +3243,10 @@ class MamApp(QMainWindow):
 
         def task():
             worker_db = DBManager()
-            worker_db.conf = dict(db.conf)
-            ok, msg = worker_db.connect()
-            if not ok:
-                raise RuntimeError(msg)
+            if not worker_db.clone_auth(db):
+                ok, msg = worker_db.connect()
+                if not ok:
+                    raise RuntimeError(msg)
 
             # 获取所有现有的代码并删除
             existing = worker_db.get_producer_codes()
