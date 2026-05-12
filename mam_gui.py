@@ -726,18 +726,18 @@ class MamApp(QMainWindow):
             self._log(f"⚠️ 缺少依赖: {m}")
 
     def _init_db_connect(self):
-        """窗口显示后在后台线程初始化数据库连接，不阻塞 UI。"""
-        self._log("⏳ 正在连接数据库...")
+        """窗口显示后在后台线程初始化连接，不阻塞 UI。"""
+        self._log("⏳ 正在连接服务器获取Token...")
         w = Worker(lambda: db.connect())
 
         def _on_db_init_done(result):
             ok, msg = result
-            self._log("✅ 数据库连接成功" if ok else f"⚠️ 数据库: {msg}")
+            self._log("✅ 服务器连接成功" if ok else f"⚠️ 服务器: {msg}")
             if ok:
                 self._refresh_code_table_after_db_connect()
 
         w.done.connect(_on_db_init_done)
-        w.error.connect(lambda e: self._log(f"⚠️ 数据库连接异常: {e}"))
+        w.error.connect(lambda e: self._log(f"⚠️ 服务器连接异常: {e}"))
         w.finished.connect(lambda: self._workers.remove(w) if w in self._workers else None)
         self._workers.append(w)
         w.start()
@@ -2954,29 +2954,21 @@ class MamApp(QMainWindow):
     def _dlg_settings(self):
         d = QDialog(self); d.setWindowTitle("系统设置"); d.setMinimumWidth(420)
         lay = QFormLayout(d)
-        fn = QLineEdit(self._cfg['user_name'])
-        fh = QLineEdit(db.conf['host'])
-        fp = QLineEdit(str(db.conf['port']))
-        fu = QLineEdit(db.conf['user'])
-        fw = QLineEdit(db.conf['password']); fw.setEchoMode(QLineEdit.EchoMode.Password)
-        fd = QLineEdit(db.conf['db'])
-        lay.addRow("操作员姓名：", fn); lay.addRow("MySQL 地址：", fh)
-        lay.addRow("MySQL 端口：", fp); lay.addRow("MySQL 用户：", fu)
-        lay.addRow("MySQL 密码：", fw); lay.addRow("数据库名：",   fd)
+        fn = QLineEdit(self._cfg.get('user_name', '操作员'))
+        fh = QLineEdit(db.conf.get('host', 'https://api.mediahashdezd.online'))
+        fu = QLineEdit(db.conf.get('user', 'admin'))
+        fw = QLineEdit(db.conf.get('password', '')); fw.setEchoMode(QLineEdit.EchoMode.Password)
+        lay.addRow("操作员姓名：", fn); lay.addRow("API 地址：", fh)
+        lay.addRow("API 用户：", fu); lay.addRow("API 密码：", fw)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                 QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(d.accept); btns.rejected.connect(d.reject); lay.addRow(btns)
         if d.exec():
             try:
                 user_name = (fn.text() or '').strip() or self._cfg.get('user_name', '操作员')
-                port_text = (fp.text() or '').strip()
-                port = int(port_text or '3306')
-                if port <= 0 or port > 65535:
-                    raise ValueError("端口必须在 1-65535 之间")
 
                 host = (fh.text() or '').strip()
                 user = (fu.text() or '').strip()
-                db_name = (fd.text() or '').strip()
                 pwd = fw.text()
 
                 self._cfg['user_name'] = user_name
@@ -2984,17 +2976,15 @@ class MamApp(QMainWindow):
 
                 db.conf.update({
                     'host': host,
-                    'port': port,
                     'user': user,
                     'password': pwd,
-                    'db': db_name,
                 })
                 db.save_conf(db.conf)
 
-                self._log(f"⚙️ 尝试重连数据库: host={host}, port={port}, user={user}, db={db_name}")
+                self._log(f"⚙️ 尝试连接服务器: {host}")
 
                 # 在后台线程连接，避免卡主线程；进度框提供视觉反馈
-                progress = QProgressDialog("正在连接数据库，请稍候…", "", 0, 0, self)
+                progress = QProgressDialog("正在连接服务器获取Token，请稍候…", "", 0, 0, self)
                 progress.setCancelButton(None)
                 progress.setWindowModality(Qt.WindowModality.WindowModal)
                 progress.setMinimumDuration(0)
@@ -3006,13 +2996,13 @@ class MamApp(QMainWindow):
                     progress.close()
                     ok2, msg2 = result
                     self._lbl_user.setText(f"操作员 · {self._cfg['user_name']}")
-                    self._log("✅ 设置保存，数据库重连" + ("成功" if ok2 else f"失败: {msg2}"))
+                    self._log("✅ 设置保存，服务器连接" + ("成功" if ok2 else f"失败: {msg2}"))
                     if ok2:
                         self._refresh_code_table_after_db_connect()
                     if not ok2:
                         QMessageBox.warning(
                             self,
-                            "数据库连接失败",
+                            "连接失败",
                             f"连接失败：{msg2}\n\n请查看诊断日志：{DIAG_LOG_FILE}"
                         )
 
