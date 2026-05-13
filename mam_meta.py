@@ -32,6 +32,7 @@ except ImportError:
 
 try:
     import piexif
+    from piexif import helper as piexif_helper
     _PIEXIF = True
 except ImportError:
     _PIEXIF = False
@@ -357,7 +358,7 @@ def _write_jpeg(filepath, text):
             exif_dict = piexif.load(filepath)
         except:
             exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}}
-        uc = piexif.helper.UserComment.dump(text[:1500], encoding="unicode")
+        uc = piexif_helper.UserComment.dump(text[:1500], encoding="unicode")
         exif_dict["Exif"][piexif.ExifIFD.UserComment] = uc
         piexif.insert(piexif.dump(exif_dict), filepath)
         _log_info(f"piexif JPEG 写入: {os.path.basename(filepath)}")
@@ -414,7 +415,7 @@ def read_metadata(filepath: str) -> dict | None:
             exif_dict = piexif.load(filepath)
             raw_b = exif_dict.get("Exif", {}).get(piexif.ExifIFD.UserComment, b"")
             if raw_b:
-                text = piexif.helper.UserComment.load(raw_b)
+                text = piexif_helper.UserComment.load(raw_b)
                 if text:
                     rec = _parse_comment(text)
                     if rec:

@@ -3293,6 +3293,10 @@ class MamApp(QMainWindow):
         item.setForeground(1, QColor("#8899aa"))
         for anc in row.get('ancestors', []):
             item.addChild(self._make_ancestor_item(anc))
+        for sub in row.get('sub_parts', []):
+            item.addChild(self._make_component_item(sub))
+        if row.get('ancestors') or row.get('sub_parts'):
+            item.setExpanded(True)
         return item
 
     def _make_descendant_item(self, row) -> QTreeWidgetItem:

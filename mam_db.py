@@ -452,87 +452,208 @@ class DBManager:
 
     def _build_lineage_from_base(self, base, canva_templates=None, local_cache=None, canva_assets_cache=None, canva_cache_lock=None, asset_cache=None):
         exact = base['phash']
+        
+        # 尝试使用远端专门优化的 O(1) 溯源接口
+        try:
+            r = self._session.post(f"{self.base_url}/relations/lineage", json={"phash": exact, "max_depth": 10}, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                assets_map = {a["phash"]: a for a in data.get("assets", [])}
+                
+                def b_derive_up(ph, visited):
+                    if ph in visited: return []
+                    res = []
+                    seen = set()
+                    for row in data.get("derive", []):
+                        if row["dst_phash"] == ph:
+                            src = row["src_phash"]
+                            if src in seen: continue
+                            seen.add(src)
+                            a = assets_map.get(src, {})
+                            node = {
+                                "src_phash": src, "rel_type": row.get("rel_type"), "operator": row.get("operator"),
+                                "filename": a.get("filename"), "producer": a.get("producer"),
+                                "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                            }
+                            node["ancestors"] = b_derive_up(src, visited | {ph})
+                            node["sub_parts"] = b_compose_up(src, visited | {ph})
+                            res.append(node)
+                    return res
+
+                def b_derive_down(ph, visited):
+                    if ph in visited: return []
+                    res = []
+                    seen = set()
+                    for row in data.get("derive", []):
+                        if row["src_phash"] == ph:
+                            dst = row["dst_phash"]
+                            if dst in seen: continue
+                            seen.add(dst)
+                            a = assets_map.get(dst, {})
+                            node = {
+                                "dst_phash": dst, "rel_type": row.get("rel_type"), "operator": row.get("operator"),
+                                "filename": a.get("filename"), "producer": a.get("producer"),
+                                "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                            }
+                            node["descendants"] = b_derive_down(dst, visited | {ph})
+                            res.append(node)
+                    return res
+
+                def b_compose_up(ph, visited):
+                    if ph in visited: return []
+                    res = []
+                    seen = set()
+                    for row in data.get("compose", []):
+                        if row["product_phash"] == ph:
+                            part = row["part_phash"]
+                            if part in seen: continue
+                            seen.add(part)
+                            a = assets_map.get(part, {})
+                            node = {
+                                "part_phash": part, "part_role": row.get("part_role"), "part_order": row.get("part_order"),
+                                "filename": a.get("filename"), "producer": a.get("producer"),
+                                "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                            }
+                            node["ancestors"] = b_derive_up(part, set())
+                            node["sub_parts"] = b_compose_up(part, visited | {ph})
+                            res.append(node)
+                    return sorted(res, key=lambda x: x.get("part_order", 0))
+
+                def b_used_in(ph):
+                    res = []
+                    seen = set()
+                    for row in data.get("compose", []):
+                        if row["part_phash"] == ph:
+                            prod = row["product_phash"]
+                            if prod in seen: continue
+                            seen.add(prod)
+                            a = assets_map.get(prod, {})
+                            res.append({
+                                "product_phash": prod, "part_role": row.get("part_role"),
+                                "filename": a.get("filename"), "producer": a.get("producer"),
+                                "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                            })
+                    return res
+                
+                return {
+                    "asset": base,
+                    "derived_from": b_derive_up(exact, set()),
+                    "derived_to": b_derive_down(exact, set()),
+                    "composed_from": b_compose_up(exact, set()),
+                    "used_in": b_used_in(exact),
+                    "canva_used": data.get("canva_used", [])
+                }
+        except Exception as e:
+            pass # 回退到旧逻辑
+            
         result = {
             "asset": base, "derived_from": [], "derived_to": [], "composed_from":[], "used_in": [], "canva_used": []
         }
-        result["derived_from"] = self._get_cached_derive_up(exact, local_cache, asset_cache=asset_cache)
         
-        try:
-            r = self._session.get(f"{self.base_url}/rel-derive", params={"src_phash": exact, "limit": 100})
-            if r.status_code == 200:
-                items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
-                if asset_cache is not None:
-                    self._bulk_fetch_missing_assets([rel.get("dst_phash") for rel in items], asset_cache)
-                for rel in items:
-                    dst = rel.get("dst_phash")
-                    if asset_cache is not None and dst in asset_cache:
-                        a = asset_cache[dst]
-                    else:
-                        ar = self._session.get(f"{self.base_url}/assets/{dst}")
-                        if ar.status_code == 200:
-                            a = ar.json()
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def fetch_derive_up():
+            return self._get_cached_derive_up(exact, local_cache, asset_cache=asset_cache)
+            
+        def fetch_derive_down():
+            derived_to = []
+            try:
+                r = self._session.get(f"{self.base_url}/rel-derive", params={"src_phash": exact, "limit": 100})
+                if r.status_code == 200:
+                    items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
+                    if asset_cache is not None:
+                        self._bulk_fetch_missing_assets([rel.get("dst_phash") for rel in items], asset_cache)
+                    for rel in items:
+                        dst = rel.get("dst_phash")
+                        if asset_cache is not None and dst in asset_cache:
+                            a = asset_cache[dst]
                         else:
-                            continue
-                    row = {
-                        "dst_phash": dst, "rel_type": rel.get("rel_type"), "operator": rel.get("operator"),
-                        "filename": a.get("filename"), "producer": a.get("producer"),
-                        "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
-                    }
-                    row['descendants'] = self._get_cached_derive_down(dst, local_cache, asset_cache=asset_cache)
-                    result["derived_to"].append(row)
-        except: pass
+                            ar = self._session.get(f"{self.base_url}/assets/{dst}")
+                            if ar.status_code == 200:
+                                a = ar.json()
+                            else:
+                                continue
+                        row = {
+                            "dst_phash": dst, "rel_type": rel.get("rel_type"), "operator": rel.get("operator"),
+                            "filename": a.get("filename"), "producer": a.get("producer"),
+                            "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                        }
+                        row['descendants'] = self._get_cached_derive_down(dst, local_cache, asset_cache=asset_cache)
+                        derived_to.append(row)
+            except: pass
+            return derived_to
 
-        result["composed_from"] = self._get_cached_compose(exact, local_cache, asset_cache=asset_cache)
+        def fetch_compose_up():
+            return self._get_cached_compose(exact, local_cache, asset_cache=asset_cache)
+            
+        def fetch_compose_down():
+            used_in = []
+            try:
+                r = self._session.get(f"{self.base_url}/rel-compose", params={"part_phash": exact, "limit": 100})
+                if r.status_code == 200:
+                    items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
+                    if asset_cache is not None:
+                        self._bulk_fetch_missing_assets([rel.get("product_phash") for rel in items], asset_cache)
+                    for rel in items:
+                        prod = rel.get("product_phash")
+                        if asset_cache is not None and prod in asset_cache:
+                            a = asset_cache[prod]
+                        else:
+                            ar = self._session.get(f"{self.base_url}/assets/{prod}")
+                            if ar.status_code == 200:
+                                a = ar.json()
+                            else:
+                                continue
+                        used_in.append({
+                            "product_phash": prod, "part_role": rel.get("part_role"),
+                            "filename": a.get("filename"), "producer": a.get("producer"),
+                            "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
+                        })
+            except: pass
+            return used_in
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            f_du = executor.submit(fetch_derive_up)
+            f_dd = executor.submit(fetch_derive_down)
+            f_cu = executor.submit(fetch_compose_up)
+            f_cd = executor.submit(fetch_compose_down)
+            
+            result["derived_from"] = f_du.result()
+            result["derived_to"] = f_dd.result()
+            result["composed_from"] = f_cu.result()
+            result["used_in"] = f_cd.result()
 
         canva_scope = {exact}
         self._collect_derive_src_phashes(result["derived_from"], canva_scope)
         self._collect_compose_part_phashes(result["composed_from"], canva_scope)
 
-        try:
-            r = self._session.get(f"{self.base_url}/rel-compose", params={"part_phash": exact, "limit": 100})
-            if r.status_code == 200:
-                items = r.json().get("items", []) if isinstance(r.json(), dict) else r.json()
-                if asset_cache is not None:
-                    self._bulk_fetch_missing_assets([rel.get("product_phash") for rel in items], asset_cache)
-                for rel in items:
-                    prod = rel.get("product_phash")
-                    if asset_cache is not None and prod in asset_cache:
-                        a = asset_cache[prod]
-                    else:
-                        ar = self._session.get(f"{self.base_url}/assets/{prod}")
-                        if ar.status_code == 200:
-                            a = ar.json()
-                        else:
-                            continue
-                    result["used_in"].append({
-                        "product_phash": prod, "part_role": rel.get("part_role"),
-                        "filename": a.get("filename"), "producer": a.get("producer"),
-                        "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
-                    })
-        except: pass
+        for tmpl in (canva_templates or []):
+            if '_asset_phash_set' not in tmpl:
+                try:
+                    tmpl['_asset_phash_set'] = set(json.loads(tmpl.get('asset_phashes', '[]')))
+                except:
+                    tmpl['_asset_phash_set'] = set()
+            t_set = tmpl['_asset_phash_set']
+            if not t_set: continue
 
-        tmpls = canva_templates if canva_templates is not None else self._prepare_canva_templates(self._fetch_canva_templates())
-        for tmpl in tmpls:
-            phashes = tmpl.get('_asset_phashes', [])
-            phash_set = tmpl.get('_asset_phash_set', set())
-            if exact in phash_set:
-                mode = 'direct'
+            mode = None
+            matched = []
+            
+            if exact in t_set:
                 matched = [exact]
+                mode = 'direct'
             else:
+                matched = list(canva_scope.intersection(t_set))
                 mode = 'upstream'
-                matched = [ph for ph in phashes if ph in canva_scope]
-            if not matched: continue
-            t = {k: v for k, v in tmpl.items() if not str(k).startswith('_')}
-            t['match_mode'] = mode
-            t['matched_phashes'] = matched
-            t['matched_count'] = len(matched)
-            t['assets'] = self._build_canva_assets_lineage(
-                phashes, local_cache=local_cache,
-                template_assets_cache=canva_assets_cache,
-                template_cache_lock=canva_cache_lock,
-                asset_cache=asset_cache
-            )
-            result["canva_used"].append(t)
+                
+            if matched:
+                t_info = dict(tmpl)
+                t_info['match_mode'] = mode
+                t_info['matched_count'] = len(matched)
+                t_info['matched_phashes'] = matched
+                t_info['assets'] = []
+                result["canva_used"].append(t_info)
+
         return result
 
     def get_lineage(self, phash, exact_only=False):
