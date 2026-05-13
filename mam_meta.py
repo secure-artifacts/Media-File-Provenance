@@ -269,6 +269,8 @@ def _exiftool_write(filepath: str, record: dict) -> bool:
         )
         if result.returncode != 0:
             err = result.stderr.decode("utf-8", errors="ignore").strip()
+            if not err:
+                err = result.stdout.decode("utf-8", errors="ignore").strip()
             _log_warn(f"exiftool 错误: {err}")
         return result.returncode == 0
     except Exception as e:

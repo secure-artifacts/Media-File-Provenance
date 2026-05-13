@@ -68,24 +68,26 @@ jobs:
             # Try multiple methods to find exiftool
             $exiftoolPath = $null
 
-            # Method 1: Get-Command (may need PATH refresh after choco)
-            try {
-              $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-              $cmd = Get-Command exiftool.exe -ErrorAction SilentlyContinue
-              if ($cmd) {
-                $exiftoolPath = $cmd.Source
-                Write-Host "Found exiftool via Get-Command: $exiftoolPath"
-              }
-            } catch {}
-
-            # Method 2: Check common Chocolatey install location
+            # Method 1: Check real Chocolatey lib location (avoid shims in bin)
             if (-not $exiftoolPath) {
-              $chocoPath = "C:\ProgramData\chocolatey\bin\exiftool.exe"
-              if (Test-Path $chocoPath) {
-                $exiftoolPath = $chocoPath
-                Write-Host "Found exiftool in Chocolatey path: $exiftoolPath"
+              $chocoLibPath = "C:\ProgramData\chocolatey\lib\exiftool\tools\exiftool.exe"
+              if (Test-Path $chocoLibPath) {
+                $exiftoolPath = $chocoLibPath
+                Write-Host "Found real exiftool in Chocolatey lib path: $exiftoolPath"
               }
             }
+
+            # Method 2: Get-Command (may need PATH refresh after choco)
+            try {
+              if (-not $exiftoolPath) {
+                $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+                $cmd = Get-Command exiftool.exe -ErrorAction SilentlyContinue
+                if ($cmd -and $cmd.Source -notmatch "chocolatey\\bin") {
+                  $exiftoolPath = $cmd.Source
+                  Write-Host "Found exiftool via Get-Command: $exiftoolPath"
+                }
+              }
+            } catch {}
 
             # Method 3: Check Program Files
             if (-not $exiftoolPath) {
