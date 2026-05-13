@@ -6,3 +6,6 @@ ImageHash>=4.3
 piexif>=1.1
 mutagen>=1.47
 requests>=2.25.0
+flask>=3.0.0
+flask-cors>=4.0.0
+werkzeug>=3.0.0

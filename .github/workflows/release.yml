@@ -142,7 +142,10 @@ jobs:
             "--collect-all=imagehash",
             "--hidden-import=requests",
             "--hidden-import=piexif",
-            "--hidden-import=mutagen.mp4"
+            "--hidden-import=mutagen.mp4",
+            "--hidden-import=flask",
+            "--hidden-import=flask_cors",
+            "--add-data=canvatools_dist;canvatools_dist"
           )
 
           if (Test-Path "ico.ico") {
@@ -210,6 +213,9 @@ jobs:
             --hidden-import requests \
             --hidden-import piexif \
             --hidden-import mutagen.mp4 \
+            --hidden-import flask \
+            --hidden-import flask_cors \
+            --add-data "canvatools_dist:canvatools_dist" \
             "${ICON_ARGS[@]}" \
             --add-binary "${EXIFTOOL_PATH}:." \
             mam_gui.py
