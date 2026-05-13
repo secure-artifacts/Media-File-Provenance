@@ -332,6 +332,7 @@ class DBManager:
                         "created_at": a.get("created_at"), "asset_type": a.get("asset_type")
                     }
                     row['ancestors'] = self._get_derive_chain_up(src, visited, depth + 1, max_depth, asset_cache)
+                    row['sub_parts'] = self._get_compose_tree(src, visited.copy(), depth + 1, max_depth, local_cache=None, asset_cache=asset_cache)
                     rows.append(row)
         except: pass
         return rows
