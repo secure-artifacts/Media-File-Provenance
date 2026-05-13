@@ -55,3 +55,6 @@ trace2.txt
 
 # VS Code
 .vscode/
+
+# 敏感服务器凭证（禁止上传！）
+.server_credentials.md

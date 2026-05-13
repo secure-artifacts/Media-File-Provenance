@@ -16,6 +16,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 import sys
+import hashlib
+import cv2
+import imagehash
+from PIL import Image
 
 def get_dist_dir():
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -352,7 +356,28 @@ def pre_stage_assets():
             # 缓存到内存（buffer 保留供打包时使用）
             staged_store[staged_id] = {"fileName": filename, "buffer": content}
             print(f"[日志] 素材 {filename} 预处理完成，已缓存到内存。")
-            return {"stagedId": staged_id, "label": asset['label']}
+            
+            # 计算 Hash，严格调用本地核心算法
+            asset_hash = None
+            try:
+                import mam_core
+                fd, temp_path = tempfile.mkstemp(suffix=ext)
+                try:
+                    with os.fdopen(fd, 'wb') as f:
+                        f.write(content)
+                    
+                    # 使用与本地 GUI 完全一致的特征提取和 Hash 函数
+                    img = mam_core.get_thumbnail(temp_path)
+                    asset_hash = mam_core.get_phash(img)
+                finally:
+                    safe_remove(temp_path)
+            except Exception as e:
+                print(f"[警告] Hash 计算失败，降级为普通 MD5: {repr(e)}")
+            
+            if not asset_hash:
+                asset_hash = hashlib.md5(content).hexdigest()[:16]
+
+            return {"stagedId": staged_id, "label": asset['label'], "hash": asset_hash}
         except Exception as e:
             print(f"[错误] 预处理过程发生异常: {repr(e)}")
             print(traceback.format_exc(limit=1).strip())
@@ -481,6 +506,7 @@ def export_bundle():
     title = sanitize_filename(data.get("title") or "canva-export")
     export_blobs = data.get("exportBlobs") or []
     asset_download_items = data.get("assetDownloadItems") or []
+    canva_tracker = data.get("canvaTracker")
 
     if not export_blobs:
         return jsonify({"error": "exportBlobs is required"}), 400
@@ -519,6 +545,11 @@ def export_bundle():
 
         # 2. 打包用户扫描素材到 素材/ 子目录，并生成关联映射
         pack_user_assets_to_zip(zf, asset_download_items, export_file_names)
+        
+        # 3. 如果有 canva_tracker 信息，也打包进去供桌面端读取
+        if canva_tracker:
+            import json
+            zf.writestr("canva_tracker.json", json.dumps(canva_tracker, ensure_ascii=False, indent=2).encode('utf-8'))
 
     zip_id = str(uuid.uuid4())
     file_name = f"{title}-含素材清单.zip"
@@ -584,12 +615,24 @@ from flask import request
 def get_config():
     cfg = {}
     try:
+        import mam_core
+        cfg = mam_core.load_config()
+    except Exception as e:
+        pass
+        
+    try:
         import json
         p = os.path.join(os.path.expanduser('~'), '.canva_tools_config.json')
         with open(p, 'r', encoding='utf-8') as f:
-            cfg = json.load(f)
-    except: pass
-    return jsonify({"hash_only_mode": cfg.get('hash_only_mode', False)})
+            canva_cfg = json.load(f)
+            cfg.update(canva_cfg)
+    except Exception as e:
+        pass
+        
+    return jsonify({
+        "hash_only_mode": cfg.get('hash_only_mode', False),
+        "user_name": cfg.get('user_name', '操作员')
+    })
 
 @app.route('/api/fast-bind', methods=['POST'])
 def fast_bind():

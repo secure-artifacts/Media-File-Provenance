@@ -472,9 +472,24 @@ class ScanWorker(QThread):
         folder      = self._folder
         folder_name = os.path.basename(folder.rstrip('/\\'))
         # 自动识别 Canva 文件夹名中的 【ID】
-        m_id        = re.search(r'【【(\d+)】】', folder_name)
+        m_id        = re.search(r'【【(\d+|[a-zA-Z0-9_]+)】】', folder_name)
         canva_id    = m_id.group(1) if m_id else None
-        canva_name  = re.sub(r'【\d+】', '', folder_name).strip() if m_id else None
+        canva_name  = re.sub(r'【.*?】', '', folder_name).strip() if m_id else None
+
+        # 尝试在目录中寻找 tracker_CANVA_*.json 获取正确的制作人
+        canva_creator = self._operator
+        try:
+            for f in os.listdir(folder):
+                if f.startswith("tracker_CANVA_") and f.endswith(".json"):
+                    with open(os.path.join(folder, f), "r", encoding="utf-8") as jf:
+                        j_data = json.load(jf)
+                        if j_data.get("creator"):
+                            canva_creator = j_data["creator"]
+                            if not canva_id and j_data.get("template_id"):
+                                canva_id = j_data["template_id"]
+                    break
+        except:
+            pass
 
         # ── 遍历收集所有媒体文件 ────────────────────────
         self.log_line.emit(f"📂 正在扫描文件列表: {folder}")
@@ -485,7 +500,7 @@ class ScanWorker(QThread):
                     all_files.append(os.path.join(rt, f))
         total = len(all_files)
         if canva_id:
-            self.log_line.emit(f"📋 发现 {total} 个媒体文件  |  🎨 Canva模板ID: 【{canva_id}】")
+            self.log_line.emit(f"📋 发现 {total} 个媒体文件  |  🎨 Canva模板ID: 【{canva_id}】(制作人:{canva_creator})")
         else:
             self.log_line.emit(f"📋 发现 {total} 个媒体文件")
         if total == 0:
@@ -567,9 +582,9 @@ class ScanWorker(QThread):
         if canva_id and canva_phashes:
             try:
                 unique_ph = list(dict.fromkeys(canva_phashes))
-                scan_db.add_canva_template(canva_id, canva_name, self._operator, unique_ph)
+                scan_db.add_canva_template(canva_id, canva_name, canva_creator, unique_ph, "常规入库扫描登记")
                 self.log_line.emit(
-                    f"🎨 Canva模板【{canva_id}】({canva_name}) 已登记，关联{len(unique_ph)}个素材"
+                    f"🎨 Canva模板【{canva_id}】({canva_name}) 已登记，制作人:{canva_creator}，关联{len(unique_ph)}个素材"
                 )
             except Exception as e:
                 self.log_line.emit(f"⚠️ Canva模板登记失败: {e}")
@@ -825,8 +840,12 @@ class FastBindWorker(QThread):
                 self.progress.emit(len(assets), idx + 1)
 
             if phashes:
-                thread_db.add_canva_template(canva_id, canva_id, self.operator, phashes, "前端极速登记")
-                self.log_line.emit(f"✅ 编号【{canva_id}】与 {len(phashes)} 个素材绑定成功！")
+                tmpl_creator = self.operator
+                tracker = self.data.get('canvaTracker')
+                if tracker and isinstance(tracker, dict):
+                    tmpl_creator = tracker.get('creator', self.operator)
+                thread_db.add_canva_template(canva_id, canva_id, tmpl_creator, phashes, "前端极速登记")
+                self.log_line.emit(f"✅ 编号【{canva_id}】与 {len(phashes)} 个素材绑定成功！(制作者: {tmpl_creator})")
             else:
                 self.log_line.emit("⚠️ 没有产生任何有效的哈希记录。")
                 
@@ -841,7 +860,7 @@ class FastBindWorker(QThread):
 
 class CanvaAutoMonitorWorker(QThread):
     found_jsons = pyqtSignal(list)
-    found_canva_products = pyqtSignal(list, str)
+    found_canva_products = pyqtSignal(list, str, object)
     log_line = pyqtSignal(str)
 
     def __init__(self, save_dir, processed_file):
@@ -928,9 +947,16 @@ class CanvaAutoMonitorWorker(QThread):
                                 # Route A: Batch Derive (check JSON)
                                 found_jsons = []
                                 media_files = []
+                                tracker_data = None
                                 for root, _, _files in os.walk(extract_dir):
                                     for f in _files:
-                                        if f.lower().endswith('.json'):
+                                        if f == 'canva_tracker.json':
+                                            try:
+                                                import json
+                                                with open(os.path.join(root, f), 'r', encoding='utf-8') as tf:
+                                                    tracker_data = json.load(tf)
+                                            except: pass
+                                        elif f.lower().endswith('.json'):
                                             found_jsons.append(os.path.join(root, f))
                                         elif f.lower().endswith(MEDIA_EXTS):
                                             if root == extract_dir:
@@ -941,8 +967,8 @@ class CanvaAutoMonitorWorker(QThread):
                                 
                                 # Route B: Canva Batch Products
                                 tid = extract_tid(fname)
-                                if tid and media_files:
-                                    self.found_canva_products.emit(media_files, tid)
+                                if tid or tracker_data:
+                                    self.found_canva_products.emit(media_files, tid or "", tracker_data)
                                     
                             except Exception as e:
                                 self.log_line.emit(f"❌ 解压或处理失败: {e}")
@@ -953,7 +979,7 @@ class CanvaAutoMonitorWorker(QThread):
                                 self.log_line.emit(f"🎥 发现新单体成品: {fname} (ID:{tid})")
                                 self._processed.append(fname)
                                 self._save_processed()
-                                self.found_canva_products.emit([fpath], tid)
+                                self.found_canva_products.emit([fpath], tid, None)
 
             except Exception as e:
                 pass
@@ -1224,7 +1250,6 @@ class MamApp(QMainWindow):
 
     def _clear_query_inputs(self):
         self._drop_query.clear()
-        self._canva_id_search.clear()
         self._clear_query_results()
 
     def _tab_register(self):
@@ -1346,7 +1371,7 @@ class MamApp(QMainWindow):
         self._chk_canva_autostart.toggled.connect(lambda: self._save_canva_config())
         settings_layout.addWidget(self._chk_canva_autostart)
         
-        self._chk_canva_hashmode = QCheckBox("启用极速纯哈希登记模式 (不导出打包)")
+        self._chk_canva_hashmode = QCheckBox("开启模板制作人员专有模式 (展示隐形写入按钮)")
         is_hashmode = self.canvatools_config.get('hash_only_mode', False)
         self._chk_canva_hashmode.setChecked(is_hashmode)
         self._chk_canva_hashmode.toggled.connect(lambda: self._save_canva_config())
@@ -2034,21 +2059,7 @@ class MamApp(QMainWindow):
         query_action.addWidget(btn, 1); query_action.addWidget(btn_clr)
         lv.addLayout(query_action)
 
-        sep = QLabel("Canva 模板ID查询")
-        sep.setStyleSheet("color:#60758b;font-size:12px;padding-top:4px;")
-        lv.addWidget(sep)
 
-        canva_row = QHBoxLayout(); canva_row.setSpacing(8)
-        self._canva_id_search = LineEdit()
-        self._canva_id_search.setPlaceholderText("输入Canva模板ID…")
-        btn_cv = PushButton("查模板")
-        btn_cv.setMinimumWidth(90)
-        btn_cv.setStyleSheet(
-            "background:#e9eef5;color:#2f4a67;height:38px;font-size:13px;"
-            "border:1px solid #d4e0ec;border-radius:8px;")
-        btn_cv.clicked.connect(self._do_query_canva)
-        canva_row.addWidget(self._canva_id_search); canva_row.addWidget(btn_cv)
-        lv.addLayout(canva_row)
 
         btn_copy_all = PushButton("📋  全部复制（Google Sheets）")
         btn_copy_all.setStyleSheet(
@@ -2753,13 +2764,23 @@ class MamApp(QMainWindow):
                 no_id.append(fd)
                 continue
 
+            tracker_data = None
+            try:
+                for f in os.listdir(fd):
+                    if f.startswith("tracker_CANVA_") and f.endswith(".json"):
+                        with open(os.path.join(fd, f), "r", encoding="utf-8") as jf:
+                            tracker_data = json.load(jf)
+                        break
+            except:
+                pass
+
             template_pack = db.get_canva_template_assets_basic(tid)
-            if not template_pack:
+            if not template_pack and not tracker_data:
                 no_template.append((fd, tid))
                 continue
 
-            tmpl = template_pack.get('template', {})
-            assets = template_pack.get('assets', [])
+            tmpl = template_pack.get('template', {}) if template_pack else {}
+            assets = template_pack.get('assets', []) if template_pack else []
             src_infos = []
             src_phashes = []
             for a in assets:
@@ -2773,6 +2794,25 @@ class MamApp(QMainWindow):
                     "producer": a.get('producer', '?'),
                     "asset_type": a.get('asset_type', '?'),
                 })
+                
+            if tracker_data:
+                if not tmpl.get('creator'):
+                    tmpl['creator'] = tracker_data.get('creator', '')
+                if not tmpl.get('template_name'):
+                    tmpl['template_name'] = ""
+                # 如果数据库中没有关联的哈希，使用 tracker 中的
+                for ph in tracker_data.get('hashes', []):
+                    if ph not in src_phashes:
+                        src_phashes.append(ph)
+                        src_infos.append({
+                            "phash": ph,
+                            "filename": "未知(未入库)",
+                            "producer": tmpl.get('creator', '?'),
+                            "asset_type": "image",
+                        })
+                # 如果模板在数据库中不存在，这里补录一下
+                if not template_pack:
+                    db.add_canva_template(tid, tmpl['template_name'], tmpl['creator'], src_phashes, "Canva批量解压时自动补录")
 
             # 去重并保持顺序
             uniq_ph = []
@@ -2847,8 +2887,6 @@ class MamApp(QMainWindow):
                         continue
 
                     part_phashes = [x for x in job['source_phashes'] if x != ph]
-                    if part_phashes:
-                        db.add_compose(part_phashes, ph)
 
                     rec = read_metadata(fp) or {}
                     rec.update({
@@ -2937,17 +2975,8 @@ class MamApp(QMainWindow):
                 add_name(r.get('producer', ''))
                 walk_components(r.get('sub_parts', []))
 
-        def walk_canva_assets(rows):
-            for r in rows or []:
-                walk_ancestors(r.get('ancestors', []))
-                walk_components(r.get('composed_from', []))
-                add_name(r.get('producer', ''))
-
         walk_ancestors(lineage.get('derived_from', []))
         walk_components(lineage.get('composed_from', []))
-        for t in lineage.get('canva_used', []):
-            walk_canva_assets(t.get('assets', []))
-            add_name(t.get('creator', ''))
         asset = lineage.get('asset') or {}
         add_name(asset.get('producer', ''))
         return chain
@@ -2994,6 +3023,14 @@ class MamApp(QMainWindow):
             lbl_prod.setWordWrap(True)
             lbl_prod.setStyleSheet("font-size:12px;color:#6a7f96;")
             lv.addWidget(lbl_prod)
+            
+            cv_meta = ast_d.get('canva_template')
+            if isinstance(cv_meta, dict) and cv_meta.get('creator'):
+                lbl_cv = QLabel(f"🎨 Canva作者: {cv_meta.get('creator')}")
+                lbl_cv.setWordWrap(True)
+                lbl_cv.setStyleSheet("font-size:11px;color:#c0392b;font-weight:bold;")
+                lv.addWidget(lbl_cv)
+
             lbl_type = QLabel(ast_d.get('asset_type', ''))
             lbl_type.setStyleSheet("font-size:11px;color:#9ba8b4;")
             lv.addWidget(lbl_type)
@@ -3130,51 +3167,6 @@ class MamApp(QMainWindow):
                 child.setForeground(0, QColor("#c0392b"))
                 child.setForeground(1, QColor("#8899aa"))
 
-                assets = t.get('assets') or []
-                matched_ph = set(t.get('matched_phashes') or [])
-                if assets:
-                    sec_assets = QTreeWidgetItem([f"      📚 模板素材（{len(assets)}项）", ""])
-                    sec_assets.setForeground(0, QColor("#a8432d"))
-                    for a in assets:
-                        aph = a.get('phash', '')
-                        hit = "🔗 " if aph and aph in matched_ph else ""
-                        a_item = QTreeWidgetItem([
-                            f"        📄 {hit}{a.get('filename', '?')}",
-                            a.get('producer', '?'),
-                        ])
-                        a_item.setForeground(0, QColor("#a04c3a"))
-                        a_item.setForeground(1, QColor("#8899aa"))
-
-                        ancestors = a.get('ancestors') or []
-                        if ancestors:
-                            anc_sec = QTreeWidgetItem([
-                                f"        ⬆ 衍生自（父级，{len(ancestors)}项）", ""
-                            ])
-                            anc_sec.setForeground(0, QColor("#b84a0a"))
-                            for anc in ancestors:
-                                anc_sec.addChild(self._make_ancestor_item(anc))
-                            a_item.addChild(anc_sec)
-                        else:
-                            src_tag = QTreeWidgetItem(["        · 原始素材（无衍生父级）", ""])
-                            src_tag.setForeground(0, QColor("#95a5b2"))
-                            a_item.addChild(src_tag)
-
-                        comp_parts = a.get('composed_from') or []
-                        if comp_parts:
-                            comp_sec = QTreeWidgetItem([
-                                f"        📦 由以下素材合成（{len(comp_parts)}项）", ""
-                            ])
-                            comp_sec.setForeground(0, QColor("#7a3aad"))
-                            for p in comp_parts:
-                                comp_sec.addChild(self._make_component_item(p))
-                            a_item.addChild(comp_sec)
-
-                        sec_assets.addChild(a_item)
-                    child.addChild(sec_assets)
-                else:
-                    miss = QTreeWidgetItem(["      · 模板素材未找到或未入库", ""])
-                    miss.setForeground(0, QColor("#95a5b2"))
-                    child.addChild(miss)
 
                 sec.addChild(child)
             tree.addTopLevelItem(sec)
@@ -3208,8 +3200,7 @@ class MamApp(QMainWindow):
         )
         canva = '; '.join(
             f"{t.get('template_id','')}({t.get('template_name','?')},创建人:{(t.get('creator') or '未知')},"
-            f"关联:{'直接' if (t.get('match_mode') or 'direct') == 'direct' else '上游'},"
-            f"模板素材:{len(t.get('assets') or [])}项)"
+            f"关联:{'直接' if (t.get('match_mode') or 'direct') == 'direct' else '上游'})"
             for t in lineage.get('canva_used', [])
         )
         return f"{fname}\t{ph}\t{prod}\t{date}\t{derived}\t{parts}\t{used}\t{canva}"
@@ -3229,7 +3220,7 @@ class MamApp(QMainWindow):
     def _copy_all_lineage(self):
         if not self._lineage_results:
             QMessageBox.information(self, "\u63d0\u793a", "\u6682\u65e0\u67e5\u8be2\u7ed3\u679c"); return
-        header = "\u6587\u4ef6\u540d\tphash\t\u5236\u4f5c\u4eba\t\u65e5\u671f\t\u884d\u751f\u6765\u6e90\t\u5c01\u88c5\u7ec4\u4ef6\t\u88ab\u7528\u4e8e\tCanva\u6a21\u677f(ID/\u5236\u4f5c\u4eba)"
+        header = "\u6587\u4ef6\u540d\tphash\t\u5236\u4f5c\u4eba\t\u65e5\u671f\t\u884d\u751f\u6765\u6e90\t\u5c01\u88c5\u7ec4\u4ef6\t\u88ab\u7528\u4e8e"
         rows = [self._lineage_to_tsv(r['fp'], r['lineage']) for r in self._lineage_results]
         QApplication.clipboard().setText(header + '\n' + '\n'.join(rows))
         self._log(f"\u2705 \u5df2\u590d\u5236 {len(rows)} \u6761\u8bb0\u5f55\uff08\u542b\u8868\u5934\uff09\uff0c\u53ef\u76f4\u63a5\u7c98\u8d34\u5230 Google Sheets")
@@ -3967,8 +3958,6 @@ class MamApp(QMainWindow):
             save_producer_codes(codes)  # JSON 备份
             worker_db.close()
             return len(codes)
-            worker_db.close()
-            return len(codes)
 
         def done(saved_count):
             self._code_table_dirty = False
@@ -4286,40 +4275,41 @@ class MamApp(QMainWindow):
         self._log(msg)
         self._refresh_lib()
 
-    def _on_canva_auto_found_products(self, files, template_id):
-        if not files or not template_id: return
+    def _on_canva_auto_found_products(self, files, template_id, tracker_data=None):
+        if not files: return
         
         if not db.conn:
             self._log("⚠️ 数据库未连接，跳过成品自动关联登记")
             return
             
-        template_pack = db.get_canva_template_assets_basic(template_id)
-        if not template_pack:
-            self._log(f"⚠️ 模板ID【{template_id}】不存在，跳过成品自动登记")
+        tmpl_name = ""
+        tmpl_creator = ""
+        src_phashes = []
+        
+        # 优先使用隐形 Tracker 数据
+        if tracker_data and isinstance(tracker_data, dict):
+            import uuid
+            template_id = template_id or f"CANVA_{uuid.uuid4().hex[:8]}"
+            tmpl_creator = tracker_data.get('creator', '')
+            src_phashes = tracker_data.get('hashes', [])
+            self._log(f"🔍 成功解析画布隐形追踪器: 制作者={tmpl_creator}, 源素材数={len(src_phashes)}")
+        elif template_id:
+            # 兼容老版本：通过 ID 去数据库查
+            template_pack = db.get_canva_template_assets_basic(template_id)
+            if template_pack:
+                tmpl = template_pack.get('template', {})
+                assets = template_pack.get('assets', [])
+                tmpl_name = tmpl.get('template_name', '')
+                tmpl_creator = tmpl.get('creator', '')
+                src_phashes = [a.get('phash') for a in assets if a.get('phash')]
+            else:
+                self._log(f"⚠️ 模板ID【{template_id}】不存在，跳过成品自动登记")
+                return
+        else:
+            self._log("⚠️ 无法识别衍生关系（无 Tracker 且无模板ID），跳过")
             return
             
-        tmpl = template_pack.get('template', {})
-        assets = template_pack.get('assets', [])
-        src_infos = []
-        src_phashes = []
-        for a in assets:
-            ph = a.get('phash')
-            if not ph: continue
-            src_phashes.append(ph)
-            src_infos.append({
-                "phash": ph,
-                "filename": a.get('filename', '?'),
-                "producer": a.get('producer', '?'),
-                "asset_type": a.get('asset_type', '?'),
-            })
-
-        uniq_ph = []
-        seen_ph = set()
-        for ph in src_phashes:
-            if ph not in seen_ph:
-                seen_ph.add(ph)
-                uniq_ph.append(ph)
-                
+        uniq_ph = list(set(src_phashes))
         op = self._cfg.get('user_name', 'System')
         
         def task():
@@ -4344,6 +4334,9 @@ class MamApp(QMainWindow):
 
                 # Update metadata
                 rec = read_metadata(fp) or {}
+                
+                ct_meta = {}
+                if tmpl_creator: ct_meta["creator"] = tmpl_creator
 
                 rec.update({
                     "phash": ph,
@@ -4352,11 +4345,7 @@ class MamApp(QMainWindow):
                     "file_size": get_file_size(fp),
                     "producer": op,
                     "created_at": datetime.now().isoformat(),
-                    "canva_template": {
-                        "template_id": template_id,
-                        "template_name": tmpl.get('template_name', ''),
-                        "creator": tmpl.get('creator', ''),
-                    }
+                    "canva_template": ct_meta
                 })
                 write_metadata(fp, rec)
                 
@@ -4373,10 +4362,13 @@ class MamApp(QMainWindow):
                 )])
                 ok_files += 1
                 new_phashes.append(ph)
-                gui_log(f"  ✅ 自动检测并成功关联: [{op}]{os.path.basename(fp)} (phash:{ph}) <- 模板【{template_id}】")
                 
-            if new_phashes:
-                thread_db.add_canva_template(template_id, tmpl.get('template_name', ''), op, new_phashes, "成品自动关联")
+                # 不再建立衍生关系，仅保留模板归属信息
+                
+                gui_log(f"  ✅ 自动检测并成功入库: [{op}]{os.path.basename(fp)} (phash:{ph}) -> 涉及源素材 {len(uniq_ph)} 个")
+                
+            if template_id and uniq_ph:
+                thread_db.add_canva_template(template_id, template_id, tmpl_creator or op, uniq_ph, "画布隐形标记自动登记")
                 
             thread_db.close()
             w.progress.emit(100)
