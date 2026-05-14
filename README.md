@@ -1,33 +1,5 @@
 # 素材溯源管理系统 (MAM) v3.1
 
-MAM 是一个面向图片和视频素材的溯源管理工具，核心能力是把素材登记、衍生关系、成品封装、Canva 模板关联和查询串成一条可追踪链路。
-
-系统基于 pHash 与数据库关系表，支持多级祖先追溯、组件树追溯、模板素材追溯，并把关键信息写回文件元数据，方便跨库或离线场景核验。
-
-## 下载安装
-
-### 预编译版本
-访问 [GitHub Releases](https://github.com/secure-artifacts/Media-File-Provenance/releases) 获取最新版本的可执行文件。
-
-- **Windows**: `mam-setup-vX.Y.Z.exe`（推荐）
-- **macOS**: `mam-vX.Y.Z.dmg`
-
-### 源码运行
-```bash
-git clone https://github.com/secure-artifacts/Media-File-Provenance.git
-cd Media-File-Provenance
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
-pip install -r requirements.txt
-python mam_gui.py
-```
-Ran command: ` c:; cd 'c:\Users\newnew\Desktop\素材管理2'; & 'c:\Python314\python.exe' 'c:\Users\newnew\.antigravity\extensions\ms-python.debugpy-2026.6.0-win32-x64\bundled\libs\debugpy\launcher' '57812' '--' 'C:\Users\newnew\Desktop\素材管理2\mam_gui.py' `
-Ran command: `Get-Content README.md -TotalCount 50`
-
-这份教学大纲和功能介绍为您精心整理，非常适合作为**内部培训、操作手册或给团队成员的演示文档**。您可以直接复制使用。
 
 ---
 
@@ -104,6 +76,38 @@ Ran command: `Get-Content README.md -TotalCount 50`
 
 ### 💡 导师授课小贴士：
 在给团队演示时，建议**实机演示 Step 3 和 Step 4**。看着一个未解压的 ZIP 包拖进去，然后立马能在查询界面拉出一长串清晰的“父子血缘树”，这种“全自动魔术”的视觉冲击力是最强的，能立刻让团队理解这个系统的巨大价值。
+
+
+
+MAM 是一个面向图片和视频素材的溯源管理工具，核心能力是把素材登记、衍生关系、成品封装、Canva 模板关联和查询串成一条可追踪链路。
+
+系统基于 pHash 与数据库关系表，支持多级祖先追溯、组件树追溯、模板素材追溯，并把关键信息写回文件元数据，方便跨库或离线场景核验。
+
+## 下载安装
+
+### 预编译版本
+访问 [GitHub Releases](https://github.com/secure-artifacts/Media-File-Provenance/releases) 获取最新版本的可执行文件。
+
+- **Windows**: `mam-setup-vX.Y.Z.exe`（推荐）
+- **macOS**: `mam-vX.Y.Z.dmg`
+
+### 源码运行
+```bash
+git clone https://github.com/secure-artifacts/Media-File-Provenance.git
+cd Media-File-Provenance
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
+pip install -r requirements.txt
+python mam_gui.py
+```
+Ran command: ` c:; cd 'c:\Users\newnew\Desktop\素材管理2'; & 'c:\Python314\python.exe' 'c:\Users\newnew\.antigravity\extensions\ms-python.debugpy-2026.6.0-win32-x64\bundled\libs\debugpy\launcher' '57812' '--' 'C:\Users\newnew\Desktop\素材管理2\mam_gui.py' `
+Ran command: `Get-Content README.md -TotalCount 50`
+
+这份教学大纲和功能介绍为您精心整理，非常适合作为**内部培训、操作手册或给团队成员的演示文档**。您可以直接复制使用。
+
 
 ## 环境要求
 
