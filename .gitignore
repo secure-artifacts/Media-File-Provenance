@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -23,7 +23,7 @@ mam_producer_codes.json
 step*.png
 
 # exiftool 可执行文件（体积大，用户自行下载）
-exiftool.exe
+# exiftool.exe (Now included)
 exiftool(-k).exe
 
 # 临时/备份文件

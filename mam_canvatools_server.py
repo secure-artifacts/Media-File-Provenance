@@ -410,6 +410,21 @@ def add_page_blob():
         return jsonify({"ok": False})
 
 
+def get_strict_target_name(page_idx, export_file_names):
+    if not export_file_names:
+        return f"{page_idx}.jpg"
+    
+    # 如果只有一个导出文件，说明用户可能只导出了一页单图
+    if len(export_file_names) == 1:
+        return export_file_names[0]
+        
+    import os
+    # 提取实际导出文件的后缀名
+    ext = os.path.splitext(export_file_names[0])[1] or ".jpg"
+    
+    # 严格模式：扫描第几页就是第几页的名字，绝不依据数组顺序乱匹配
+    return f"{page_idx}{ext}"
+
 def pack_user_assets_to_zip(zf, asset_download_items, export_file_names=None):
     """将扫描到的用户素材下载并按页分组写入 ZIP 的 '素材/' 子目录，生成对照表。"""
     if not asset_download_items:
@@ -422,7 +437,7 @@ def pack_user_assets_to_zip(zf, asset_download_items, export_file_names=None):
     for asset in asset_download_items:
         try:
             page_idx = asset.get('pageIndex', 1)
-            assoc_export = export_file_names[page_idx - 1] if page_idx - 1 < len(export_file_names) else f"未命名成品_{page_idx}"
+            assoc_export = get_strict_target_name(page_idx, export_file_names)
             
             # 使用成品文件名来命名素材文件夹（去掉后缀）
             export_base = os.path.splitext(assoc_export)[0]
@@ -549,6 +564,19 @@ def export_bundle():
         # 3. 如果有 canva_tracker 信息，也打包进去供桌面端读取
         if canva_tracker:
             import json
+            if isinstance(canva_tracker, list):
+                # 转换 tracker_data 的 pageIndex 为 target filename
+                transformed_trackers = []
+                for tracker in canva_tracker:
+                    page_idx = tracker.get("pageIndex", 1)
+                    target_name = get_strict_target_name(page_idx, export_file_names)
+                    transformed_trackers.append({
+                        "target": target_name,
+                        "creator": tracker.get("creator", ""),
+                        "hashes": tracker.get("hashes", [])
+                    })
+                canva_tracker = transformed_trackers
+
             zf.writestr("canva_tracker.json", json.dumps(canva_tracker, ensure_ascii=False, indent=2).encode('utf-8'))
 
     zip_id = str(uuid.uuid4())

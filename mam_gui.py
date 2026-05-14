@@ -959,8 +959,7 @@ class CanvaAutoMonitorWorker(QThread):
                                         elif f.lower().endswith('.json'):
                                             found_jsons.append(os.path.join(root, f))
                                         elif f.lower().endswith(MEDIA_EXTS):
-                                            if root == extract_dir:
-                                                media_files.append(os.path.join(root, f))
+                                            media_files.append(os.path.join(root, f))
 
                                 if found_jsons:
                                     self.found_jsons.emit(found_jsons)
@@ -4289,14 +4288,31 @@ class MamApp(QMainWindow):
         tmpl_name = ""
         tmpl_creator = ""
         src_phashes = []
+        target_map = {}
         
         # 优先使用隐形 Tracker 数据
-        if tracker_data and isinstance(tracker_data, dict):
+        if tracker_data:
             import uuid
             template_id = template_id or f"CANVA_{uuid.uuid4().hex[:8]}"
-            tmpl_creator = tracker_data.get('creator', '')
-            src_phashes = tracker_data.get('hashes', [])
-            self._log(f"🔍 成功解析画布隐形追踪器: 制作者={tmpl_creator}, 源素材数={len(src_phashes)}")
+            
+            if isinstance(tracker_data, list):
+                self._log(f"🔍 成功解析多页精准 Tracker 数据，包含 {len(tracker_data)} 个成品映射")
+                for item in tracker_data:
+                    target_name = item.get("target")
+                    if target_name:
+                        target_map[target_name] = {
+                            "creator": item.get("creator", ""),
+                            "hashes": item.get("hashes", [])
+                        }
+            elif isinstance(tracker_data, dict):
+                tmpl_creator = tracker_data.get('creator', '')
+                src_phashes = tracker_data.get('hashes', [])
+                self._log(f"🔍 成功解析单画布隐形追踪器: 制作者={tmpl_creator}, 源素材数={len(src_phashes)}")
+                for f in files:
+                    target_map[os.path.basename(f)] = {
+                        "creator": tmpl_creator,
+                        "hashes": src_phashes
+                    }
         elif template_id:
             # 兼容老版本：通过 ID 去数据库查
             template_pack = db.get_canva_template_assets_basic(template_id)
@@ -4306,6 +4322,11 @@ class MamApp(QMainWindow):
                 tmpl_name = tmpl.get('template_name', '')
                 tmpl_creator = tmpl.get('creator', '')
                 src_phashes = [a.get('phash') for a in assets if a.get('phash')]
+                for f in files:
+                    target_map[os.path.basename(f)] = {
+                        "creator": tmpl_creator,
+                        "hashes": src_phashes
+                    }
             else:
                 self._log(f"⚠️ 模板ID【{template_id}】不存在，跳过成品自动登记")
                 return
@@ -4313,7 +4334,6 @@ class MamApp(QMainWindow):
             self._log("⚠️ 无法识别衍生关系（无 Tracker 且无模板ID），跳过")
             return
             
-        uniq_ph = list(set(src_phashes))
         op = self._cfg.get('user_name', 'System')
         
         def task():
@@ -4328,13 +4348,19 @@ class MamApp(QMainWindow):
                     return {"success": False}
                     
             ok_files = 0
-            new_phashes = []
             for idx, fp in enumerate(files):
                 w.progress.emit(10 + int(80 * (idx / len(files))))
                 ph, _ = ensure_registered(fp, op, db_inst=thread_db)
                 if not ph:
                     gui_log(f"  ❌ 文件处理失败: {os.path.basename(fp)}")
                     continue
+
+                bname = os.path.basename(fp)
+                t_info = target_map.get(bname, target_map.get(os.path.splitext(bname)[0], {}))
+                
+                tmpl_creator = t_info.get("creator", "")
+                src_phashes = t_info.get("hashes", [])
+                uniq_ph = list(set(src_phashes))
 
                 # Update metadata
                 rec = read_metadata(fp) or {}
@@ -4344,7 +4370,7 @@ class MamApp(QMainWindow):
 
                 rec.update({
                     "phash": ph,
-                    "filename": os.path.basename(fp),
+                    "filename": bname,
                     "asset_type": get_asset_type(fp),
                     "file_size": get_file_size(fp),
                     "producer": op,
@@ -4356,7 +4382,7 @@ class MamApp(QMainWindow):
                 # Upsert to DB
                 thread_db.upsert_assets_bulk([(
                     ph,
-                    os.path.basename(fp),
+                    bname,
                     get_asset_type(fp),
                     get_file_size(fp),
                     op,
@@ -4364,15 +4390,16 @@ class MamApp(QMainWindow):
                     json.dumps(rec, ensure_ascii=False, default=str),
                     None,
                 )])
+                
+                if t_info:
+                    if template_id and uniq_ph:
+                        thread_db.add_canva_template(template_id, template_id, tmpl_creator or op, uniq_ph, "画布隐形标记自动登记")
+                        thread_db.add_compose(uniq_ph, ph)
+                    gui_log(f"  ✅ 精准靶向入库: [{op}]{bname} -> 绑定源素材 {len(uniq_ph)} 个")
+                else:
+                    gui_log(f"  ✅ 关联素材自动收录: [{op}]{bname}")
+                
                 ok_files += 1
-                new_phashes.append(ph)
-                
-                # 不再建立衍生关系，仅保留模板归属信息
-                
-                gui_log(f"  ✅ 自动检测并成功入库: [{op}]{os.path.basename(fp)} (phash:{ph}) -> 涉及源素材 {len(uniq_ph)} 个")
-                
-            if template_id and uniq_ph:
-                thread_db.add_canva_template(template_id, template_id, tmpl_creator or op, uniq_ph, "画布隐形标记自动登记")
                 
             thread_db.close()
             w.progress.emit(100)
