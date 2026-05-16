@@ -418,11 +418,16 @@ def get_strict_target_name(page_idx, export_file_names):
     if len(export_file_names) == 1:
         return export_file_names[0]
         
+    # 按照顺序匹配实际导出的文件名 (Canva ZIP 中的文件通常按页顺序排列)
+    idx = page_idx - 1
+    if 0 <= idx < len(export_file_names):
+        return export_file_names[idx]
+        
     import os
     # 提取实际导出文件的后缀名
     ext = os.path.splitext(export_file_names[0])[1] or ".jpg"
     
-    # 严格模式：扫描第几页就是第几页的名字，绝不依据数组顺序乱匹配
+    # Fallback：当数组越界时使用默认命名
     return f"{page_idx}{ext}"
 
 def pack_user_assets_to_zip(zf, asset_download_items, export_file_names=None):
