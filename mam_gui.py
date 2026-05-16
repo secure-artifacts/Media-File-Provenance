@@ -986,12 +986,45 @@ class CanvaAutoMonitorWorker(QThread):
         self.log_line.emit("⏸ 自动监控已停止。")
 
 
+class UpdateCheckWorker(QThread):
+    update_available = pyqtSignal(str, str, str)
+
+    def __init__(self, current_version):
+        super().__init__()
+        self.current_version = current_version
+
+    def run(self):
+        import requests
+        try:
+            resp = requests.get(
+                "https://api.github.com/repos/secure-artifacts/Media-File-Provenance/releases/latest",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                latest_version = data.get("tag_name", "")
+                html_url = data.get("html_url", "")
+                body = data.get("body", "")
+                
+                def parse_version(v):
+                    return [int(x) for x in v.replace('v', '').split('.') if x.isdigit()]
+                
+                cur_v = parse_version(self.current_version)
+                lat_v = parse_version(latest_version)
+                
+                if lat_v > cur_v:
+                    self.update_available.emit(latest_version, html_url, body)
+        except Exception:
+            pass
+
+
 class MamApp(QMainWindow):
+    APP_VERSION = "v3.3.16"
     canva_log_sig = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MAM 素材溯源管理系统 v3.3.15")
+        self.setWindowTitle(f"MAM 素材溯源管理系统 {self.APP_VERSION}")
         self.setMinimumSize(1280, 920)
         self._cfg     = load_config()
         self._workers = []
@@ -1018,6 +1051,47 @@ class MamApp(QMainWindow):
         self._current_worker = None  # 当前后台 worker，用于发送进度信号
         self._code_table_dirty = False
         self._build_ui()
+        
+        self._check_for_updates()
+
+    def _check_for_updates(self):
+        self.skipped_version = self._cfg.get("skipped_update_version", "")
+        self.update_worker = UpdateCheckWorker(self.APP_VERSION)
+        self.update_worker.update_available.connect(self._on_update_available)
+        self.update_worker.start()
+
+    def _on_update_available(self, latest_version, html_url, body):
+        if latest_version == self.skipped_version:
+            return
+            
+        import webbrowser
+        import mam_core
+        
+        msg = QMessageBox(self)
+        msg.setWindowTitle("发现新版本")
+        # Ensure we don't display too long release notes
+        display_body = body[:500] + "..." if len(body) > 500 else body
+        msg.setText(f"检测到 GitHub 有新版本: {latest_version}\n\n更新说明:\n{display_body}\n\n是否立即前往下载？")
+        
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Ignore)
+        
+        btn_download = msg.button(QMessageBox.Yes)
+        btn_download.setText("点击下载")
+        
+        btn_skip = msg.button(QMessageBox.Ignore)
+        btn_skip.setText("跳过此版本")
+        
+        btn_close = msg.button(QMessageBox.No)
+        btn_close.setText("稍后再说")
+        
+        msg.exec_()
+        
+        clicked = msg.clickedButton()
+        if clicked == btn_download:
+            webbrowser.open(html_url)
+        elif clicked == btn_skip:
+            self._cfg["skipped_update_version"] = latest_version
+            mam_core.save_config(self._cfg)
         log_bus.sig.connect(self._log)
         self.canva_log_sig.connect(self._canva_append_log)
         self._log(f"🧭 诊断日志: {DIAG_LOG_FILE}")
