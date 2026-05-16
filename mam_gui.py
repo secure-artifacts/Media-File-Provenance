@@ -991,7 +991,7 @@ class MamApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MAM 素材溯源管理系统 v3.3.14")
+        self.setWindowTitle("MAM 素材溯源管理系统 v3.3.15")
         self.setMinimumSize(1280, 920)
         self._cfg     = load_config()
         self._workers = []
