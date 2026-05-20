@@ -1054,6 +1054,29 @@ class MamApp(QMainWindow):
         
         self._check_for_updates()
 
+        log_bus.sig.connect(self._log)
+        self.canva_log_sig.connect(self._canva_append_log)
+        self._log(f"🧭 诊断日志: {DIAG_LOG_FILE}")
+        # 延迟连接数据库，避免窗口显示前卡住主线程
+        QTimer.singleShot(200, self._init_db_connect)
+        # Auto-start CanvaTools if enabled
+        try:
+            import json
+            canvatools_config_file = os.path.join(os.path.expanduser('~'), '.canva_tools_config.json')
+            if os.path.exists(canvatools_config_file):
+                with open(canvatools_config_file, 'r', encoding='utf-8') as f:
+                    c_cfg = json.load(f)
+                    if c_cfg.get('autostart', False):
+                        QTimer.singleShot(1500, self._start_canva_server)
+        except: pass
+
+        # exiftool 状态
+        self._log(exiftool_status())
+        # 检查 Python 依赖
+        missing = check_deps()
+        for m in missing:
+            self._log(f"⚠️ 缺少依赖: {m}")
+
     def _check_for_updates(self):
         self.skipped_version = self._cfg.get("skipped_update_version", "")
         self.update_worker = UpdateCheckWorker(self.APP_VERSION)
@@ -1092,28 +1115,6 @@ class MamApp(QMainWindow):
         elif clicked == btn_skip:
             self._cfg["skipped_update_version"] = latest_version
             mam_core.save_config(self._cfg)
-        log_bus.sig.connect(self._log)
-        self.canva_log_sig.connect(self._canva_append_log)
-        self._log(f"🧭 诊断日志: {DIAG_LOG_FILE}")
-        # 延迟连接数据库，避免窗口显示前卡住主线程
-        QTimer.singleShot(200, self._init_db_connect)
-        # Auto-start CanvaTools if enabled
-        try:
-            import json
-            canvatools_config_file = os.path.join(os.path.expanduser('~'), '.canva_tools_config.json')
-            if os.path.exists(canvatools_config_file):
-                with open(canvatools_config_file, 'r', encoding='utf-8') as f:
-                    c_cfg = json.load(f)
-                    if c_cfg.get('autostart', False):
-                        QTimer.singleShot(1500, self._start_canva_server)
-        except: pass
-
-        # exiftool 状态
-        self._log(exiftool_status())
-        # 检查 Python 依赖
-        missing = check_deps()
-        for m in missing:
-            self._log(f"⚠️ 缺少依赖: {m}")
 
     def _init_db_connect(self):
         """窗口显示后在后台线程初始化连接，不阻塞 UI。"""
