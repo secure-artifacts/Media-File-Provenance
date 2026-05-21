@@ -659,6 +659,19 @@ class JSONDropArea(QFrame):
     def file(self):
         return self._files[0] if self._files else None
 
+def find_existing_file_with_fallback(fpath):
+    if os.path.exists(fpath):
+        return fpath
+    base, ext = os.path.splitext(fpath)
+    candidates = ['.mp4', '.mov', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avi', '.mkv']
+    for candidate_ext in candidates:
+        if candidate_ext.lower() == ext.lower():
+            continue
+        test_path = base + candidate_ext
+        if os.path.exists(test_path):
+            return test_path
+    return fpath
+
 class BatchDeriveWorker(QThread):
     progress = pyqtSignal(int, int, int, int)
     log_line = pyqtSignal(str)
@@ -726,6 +739,8 @@ class BatchDeriveWorker(QThread):
                 if not os.path.isabs(target):
                     target = os.path.join(base_dir, target)
                 
+                target = find_existing_file_with_fallback(target)
+                
                 try:
                     dst_phash, _ = ensure_registered(target, self._operator, fill_missing_producer=True)
                     if not dst_phash:
@@ -743,6 +758,7 @@ class BatchDeriveWorker(QThread):
                 for src in sources:
                     if not os.path.isabs(src):
                         src = os.path.join(base_dir, src)
+                    src = find_existing_file_with_fallback(src)
                     try:
                         src_phash, _ = ensure_registered(src, self._operator, fill_missing_producer=True)
                         if not src_phash:
@@ -904,6 +920,17 @@ class CanvaAutoMonitorWorker(QThread):
 
         while not self._should_stop:
             try:
+                # 确保数据库已经成功连接
+                if not db.conn:
+                    time.sleep(1)
+                    continue
+
+                # 确保主窗口当前没有正在执行的后台任务，防止文件被自动吃掉后却无法处理
+                parent = self.parent()
+                if parent and parent._current_worker is not None:
+                    time.sleep(1)
+                    continue
+
                 if os.path.exists(self.save_dir):
                     for fname in os.listdir(self.save_dir):
                         # Avoid processing incomplete files
@@ -911,24 +938,49 @@ class CanvaAutoMonitorWorker(QThread):
                             continue
                             
                         fpath = os.path.join(self.save_dir, fname)
-                        if fname in self._processed or not os.path.isfile(fpath):
+                        is_dir = os.path.isdir(fpath)
+                        is_file = os.path.isfile(fpath)
+                        
+                        if fname in self._processed or (not is_file and not is_dir):
                             continue
                             
-                        # Only process zip or media files
                         is_zip = fname.lower().endswith('.zip')
                         is_media = fname.lower().endswith(MEDIA_EXTS)
                         
-                        if not is_zip and not is_media:
-                            continue
-
-                        # Wait for file to finish downloading/writing
-                        try:
-                            size_before = os.path.getsize(fpath)
-                            time.sleep(1)
-                            size_after = os.path.getsize(fpath)
-                            if size_before != size_after or size_before == 0:
+                        # Process dir if it is a directory
+                        if is_dir:
+                            # 文件夹防抖：获取目录下所有文件及文件夹自身的最大修改时间
+                            try:
+                                max_mtime = os.path.getmtime(fpath)
+                                for root, dirs, files in os.walk(fpath):
+                                    for d in dirs:
+                                        try:
+                                            d_mtime = os.path.getmtime(os.path.join(root, d))
+                                            if d_mtime > max_mtime:
+                                                max_mtime = d_mtime
+                                        except: pass
+                                    for f in files:
+                                        try:
+                                            f_mtime = os.path.getmtime(os.path.join(root, f))
+                                            if f_mtime > max_mtime:
+                                                max_mtime = f_mtime
+                                        except: pass
+                                        
+                                if time.time() - max_mtime < 10:
+                                    continue
+                            except:
                                 continue
-                        except:
+                        elif is_zip or is_media:
+                            # Wait for file to finish downloading/writing
+                            try:
+                                size_before = os.path.getsize(fpath)
+                                time.sleep(1)
+                                size_after = os.path.getsize(fpath)
+                                if size_before != size_after or size_before == 0:
+                                    continue
+                            except:
+                                continue
+                        else:
                             continue
                             
                         if is_zip:
@@ -979,6 +1031,40 @@ class CanvaAutoMonitorWorker(QThread):
                                 self._processed.append(fname)
                                 self._save_processed()
                                 self.found_canva_products.emit([fpath], tid, None)
+                                
+                        elif is_dir:
+                            self.log_line.emit(f"📂 发现新扫描文件夹: {fname}，正在解析关联...")
+                            try:
+                                self._processed.append(fname)
+                                self._save_processed()
+                                
+                                # Route A: Batch Derive (check JSON)
+                                found_jsons = []
+                                media_files = []
+                                tracker_data = None
+                                for root, _, _files in os.walk(fpath):
+                                    for f in _files:
+                                        if f == 'canva_tracker.json':
+                                            try:
+                                                import json
+                                                with open(os.path.join(root, f), 'r', encoding='utf-8') as tf:
+                                                    tracker_data = json.load(tf)
+                                            except: pass
+                                        elif f.lower().endswith('.json'):
+                                            found_jsons.append(os.path.join(root, f))
+                                        elif f.lower().endswith(MEDIA_EXTS):
+                                            media_files.append(os.path.join(root, f))
+
+                                if found_jsons:
+                                    self.found_jsons.emit(found_jsons)
+                                
+                                # Route B: Canva Batch Products
+                                tid = extract_tid(fname)
+                                if tid or tracker_data:
+                                    self.found_canva_products.emit(media_files, tid or "", tracker_data)
+                                    
+                            except Exception as e:
+                                self.log_line.emit(f"❌ 处理文件夹失败: {e}")
 
             except Exception as e:
                 pass
@@ -1019,7 +1105,7 @@ class UpdateCheckWorker(QThread):
 
 
 class MamApp(QMainWindow):
-    APP_VERSION = "v3.3.16"
+    APP_VERSION = "v3.3.17"
     canva_log_sig = pyqtSignal(str)
 
     def __init__(self):
