@@ -1,7 +1,7 @@
 # mam_gui.py — 主界面（纯 UI，业务逻辑见 mam_core / mam_db / mam_meta）
 import sys
 
-APP_VERSION = "3.3.17"
+APP_VERSION = "3.3.18"
 
 import threading
 import socket
