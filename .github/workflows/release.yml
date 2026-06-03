@@ -16,12 +16,21 @@ env:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build on ${{ matrix.artifact_suffix }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            artifact_suffix: Windows
+            package_suffix: win64
+          - os: macos-latest
+            artifact_suffix: macOS
+            package_suffix: macos
+          - os: macos-15-intel
+            artifact_suffix: macOS-Intel
+            package_suffix: macos-intel
 
     steps:
       - name: Checkout
@@ -257,7 +266,7 @@ jobs:
             'DefaultDirName={autopf}\MAMDesktop',
             'DefaultGroupName=MAM Desktop',
             'OutputDir=..\..\release',
-            'OutputBaseFilename=MAMDesktop-Installer-{#MyAppVersion}-win64',
+            'OutputBaseFilename=MAMDesktop-Installer-{#MyAppVersion}-${{ matrix.package_suffix }}',
             'Compression=lzma',
             'SolidCompression=yes',
             'ArchitecturesAllowed=x64compatible',
@@ -304,12 +313,12 @@ jobs:
             --identifier com.nuosishizi.mamdesktop \
             --version "$VERSION" \
             --install-location "/" \
-            "release/MAMDesktop-Installer-${VERSION}-macos.pkg"
+            "release/MAMDesktop-Installer-${VERSION}-${{ matrix.package_suffix }}.pkg"
 
           mkdir -p dmgroot
           cp -R dist/MAMDesktop.app dmgroot/
           ln -s /Applications dmgroot/Applications
-          hdiutil create -volname "MAM Desktop" -srcfolder dmgroot -ov -format UDZO "release/MAMDesktop-${VERSION}-macos.dmg"
+          hdiutil create -volname "MAM Desktop" -srcfolder dmgroot -ov -format UDZO "release/MAMDesktop-${VERSION}-${{ matrix.package_suffix }}.dmg"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
@@ -319,7 +328,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: installers-${{ runner.os }}
+          name: installers-${{ matrix.artifact_suffix }}
           path: release/*
           if-no-files-found: error
 

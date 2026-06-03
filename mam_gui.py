@@ -1,6 +1,8 @@
 # mam_gui.py — 主界面（纯 UI，业务逻辑见 mam_core / mam_db / mam_meta）
 import sys
 
+APP_VERSION = "3.3.17"
+
 import threading
 import socket
 from werkzeug.serving import make_server
@@ -604,6 +606,7 @@ class Worker(QThread):
     done     = pyqtSignal(object)
     error    = pyqtSignal(str)
     progress = pyqtSignal(int)  # 0-100
+    stats    = pyqtSignal(object)
     def __init__(self, fn): super().__init__(); self._fn = fn
     def run(self):
         try:
@@ -992,7 +995,7 @@ class MamApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MAM 素材溯源管理系统 v3.2.0")
+        self.setWindowTitle(f"MAM 素材溯源管理系统 v{APP_VERSION}")
         self.setMinimumSize(1280, 920)
         self._cfg     = load_config()
         self._workers = []
@@ -1252,10 +1255,49 @@ class MamApp(QMainWindow):
         self._drop_query.clear()
         self._clear_query_results()
 
+    def _make_ingest_status_bar(self):
+        bar = QFrame()
+        bar.setStyleSheet(
+            "QFrame{background:#f7fafc;border:1px solid #d7e1ec;border-radius:8px;}"
+            "QLabel{font-size:13px;color:#2f4a67;font-weight:700;padding:8px 12px;}"
+        )
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(4, 2, 4, 2)
+        lay.setSpacing(8)
+        labels = {}
+        for key, title in (("total", "总数"), ("success", "入库数"), ("failed", "失败数")):
+            lbl = QLabel(f"{title}: 0")
+            labels[key] = lbl
+            lay.addWidget(lbl)
+        lay.addStretch(1)
+        return bar, labels
+
+    def _set_ingest_status(self, labels, total=0, success=0, failed=0):
+        if not labels:
+            return
+        values = {
+            "total": ("总数", total),
+            "success": ("入库数", success),
+            "failed": ("失败数", failed),
+        }
+        for key, (title, value) in values.items():
+            lbl = labels.get(key)
+            if lbl:
+                lbl.setText(f"{title}: {int(value or 0)}")
+
+    def _on_register_files_changed(self, files):
+        self._set_ingest_status(self._register_stats, total=len(files), success=0, failed=0)
+
+    def _on_derive_batch_files_changed(self, files):
+        self._set_ingest_status(self._derive_batch_stats, total=len(files), success=0, failed=0)
+
     def _tab_register(self):
         w = QWidget(); v = QVBoxLayout(w)
         v.addWidget(QLabel("拖入原始素材，系统自动计算 phash 并写入文件元数据（备注字段）和数据库"))
         self._drop_raw = DropArea("拖入素材（可多个）", multi=True); v.addWidget(self._drop_raw)
+        status_bar, self._register_stats = self._make_ingest_status_bar()
+        v.addWidget(status_bar)
+        self._drop_raw.filesChanged.connect(self._on_register_files_changed)
 
         action = QHBoxLayout(); action.setSpacing(10)
         btn = PushButton("⚡  执行批量登记")
@@ -1820,6 +1862,9 @@ class MamApp(QMainWindow):
         # 拖拽区
         self._drop_derive_batch = JSONDropArea("拖入 JSON 文件或文件夹")
         v.addWidget(self._drop_derive_batch)
+        status_bar, self._derive_batch_stats = self._make_ingest_status_bar()
+        v.addWidget(status_bar)
+        self._drop_derive_batch.filesChanged.connect(self._on_derive_batch_files_changed)
         
         # 按钮区
         btn_action = QHBoxLayout(); btn_action.setSpacing(10)
@@ -1916,10 +1961,17 @@ class MamApp(QMainWindow):
             if total > 0:
                 self._progress.setValue(int(done * 100 / total))
                 self._progress.setFormat(f"已处理: {done}/{total} [成功:{success} 失败:{failed}]")
+            self._set_ingest_status(self._derive_batch_stats, total=total, success=success, failed=failed)
 
         def _on_fin(res):
             self._progress.hide()
             self._clear_derive_batch_inputs()
+            self._set_ingest_status(
+                self._derive_batch_stats,
+                total=res.get('total', 0),
+                success=res.get('success', 0),
+                failed=res.get('failed', 0),
+            )
             if w in self._workers:
                 self._workers.remove(w)
             self._current_worker = None
@@ -1961,18 +2013,21 @@ class MamApp(QMainWindow):
 
     def _do_derive_batch(self):
         if self._current_worker is not None:
-            QMessageBox.warning(self, "提示", "当前有后台任务正在进行，请稍候。")
+            self._log("⚠️ 当前有后台任务正在进行，请稍候。")
             return
             
         fps = self._drop_derive_batch.files()
         if not fps:
-            QMessageBox.critical(self, "错误", "请先拖入 JSON 文件或包含 JSON 的文件夹！")
+            self._set_ingest_status(self._derive_batch_stats, total=0, success=0, failed=0)
+            self._log("⚠️ 请先拖入 JSON 文件或包含 JSON 的文件夹")
             return
 
         btn = self.sender()
-        btn.setEnabled(False)
-        btn.setText("⏳ 正在处理...")
+        if btn:
+            btn.setEnabled(False)
+            btn.setText("⏳ 正在处理...")
         self._log(f"🎬 开始通过 JSON 批量衍生导入 (共 {len(fps)} 个文件)...")
+        self._set_ingest_status(self._derive_batch_stats, total=len(fps), success=0, failed=0)
         
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
@@ -1985,18 +2040,25 @@ class MamApp(QMainWindow):
             if total > 0:
                 self._progress.setValue(int(done * 100 / total))
                 self._progress.setFormat(f"已处理: {done}/{total} [成功:{success} 失败:{failed}]")
+            self._set_ingest_status(self._derive_batch_stats, total=total, success=success, failed=failed)
 
         def _on_fin(res):
             self._progress.hide()
-            btn.setEnabled(True)
-            btn.setText("🎬  开始批量导入与关联")
+            if btn:
+                btn.setEnabled(True)
+                btn.setText("🎬  开始批量导入与关联")
             self._clear_derive_batch_inputs()
+            self._set_ingest_status(
+                self._derive_batch_stats,
+                total=res.get('total', 0),
+                success=res.get('success', 0),
+                failed=res.get('failed', 0),
+            )
             if w in self._workers:
                 self._workers.remove(w)
             self._current_worker = None
             msg = f"🎉 批量衍生处理完成！\n总数：{res['total']}，成功：{res['success']}，失败：{res['failed']}"
             self._log(msg)
-            QMessageBox.information(self, "完成", msg)
 
         w.log_line.connect(self._log)
         w.progress.connect(_on_prog)
@@ -2129,7 +2191,7 @@ class MamApp(QMainWindow):
         return w
 
     # ═══════════════════ 后台任务 ═════════════════════
-    def _bg(self, fn, done_cb=None, msg="操作", err_cb=None):
+    def _bg(self, fn, done_cb=None, msg="操作", err_cb=None, stats_cb=None):
         w = Worker(fn)
         self._current_worker = w
         def on_done(r):
@@ -2150,6 +2212,8 @@ class MamApp(QMainWindow):
         w.error.connect(on_error)
         w.progress.connect(lambda v: (self._progress.setVisible(True), 
                                        self._progress.setValue(v)))
+        if stats_cb:
+            w.stats.connect(stats_cb)
         w.start()
         self._workers.append(w)
     
@@ -2158,6 +2222,10 @@ class MamApp(QMainWindow):
         if self._current_worker:
             self._current_worker.progress.emit(percent)
 
+    def report_stats(self, stats):
+        """后台任务可调用此方法报告统计信息。"""
+        if self._current_worker:
+            self._current_worker.stats.emit(stats)
 
     def _open_log_dir(self):
         log_dir = os.path.join(os.path.expanduser('~'), '.mam_logs')
@@ -2210,24 +2278,56 @@ class MamApp(QMainWindow):
     # ═══════════════════ 业务处理 ═════════════════════
     def _do_register(self):
         fps = self._drop_raw.files()
-        if not fps: QMessageBox.warning(self, "提示", "请先拖入素材文件"); return
+        if not fps:
+            self._set_ingest_status(self._register_stats, total=0, success=0, failed=0)
+            self._log("⚠️ 请先拖入素材文件")
+            return
         op = self._cfg['user_name']
+        self._set_ingest_status(self._register_stats, total=len(fps), success=0, failed=0)
         def task():
             total = len(fps)
             upload_batch = 120
             upload_buffer = []
+            success = 0
+            failed = 0
+
+            def emit_stats():
+                self.report_stats({"total": total, "success": success, "failed": failed})
 
             def flush_assets():
+                nonlocal success, failed
                 if not upload_buffer:
                     return
-                db.upsert_assets_bulk(list(upload_buffer))
+                batch = list(upload_buffer)
                 upload_buffer.clear()
+                rows = [item["payload"] for item in batch]
+                uploaded = db.upsert_assets_bulk(rows)
+                success += uploaded
+                failed += max(0, len(batch) - uploaded)
+                if uploaded == len(batch):
+                    for item in batch:
+                        gui_log(
+                            f"✅ 已登记: {item['fname']}  作者:{item['producer']}{item['src_tag']}  phash:{item['phash']}"
+                        )
+                else:
+                    gui_log(f"⚠️ 批量入库部分失败: 成功 {uploaded}/{len(batch)}")
+                emit_stats()
 
             for idx, fp in enumerate(fps):
                 img = get_thumbnail(fp)
-                if img is None: gui_log(f"⚠️ 无法读取: {os.path.basename(fp)}"); continue
+                if img is None:
+                    failed += 1
+                    gui_log(f"⚠️ 无法读取: {os.path.basename(fp)}")
+                    emit_stats()
+                    self.report_progress(int((idx + 1) / total * 100))
+                    continue
                 ph, src = get_phash_from_file(fp, img)
-                if not ph: gui_log(f"❌ phash计算失败: {os.path.basename(fp)}"); continue
+                if not ph:
+                    failed += 1
+                    gui_log(f"❌ phash计算失败: {os.path.basename(fp)}")
+                    emit_stats()
+                    self.report_progress(int((idx + 1) / total * 100))
+                    continue
                 fname = os.path.basename(fp); atype = get_asset_type(fp)
                 fsize = get_file_size(fp); now = datetime.now()
                 # 如已有元数据，可读取文件中已写入的 created_at，避免覆盖
@@ -2246,21 +2346,36 @@ class MamApp(QMainWindow):
                        "file_size": fsize, "producer": producer,
                        "created_at": created_at.isoformat()}
                 write_metadata(fp, rec)
-                upload_buffer.append((
-                    ph, fname, atype, fsize, producer, created_at,
-                    json.dumps(rec, ensure_ascii=False, default=str),
-                    make_thumb_bytes(img)
-                ))
+                src_tag = "（保留原元数据）" if existing_meta.get('producer') else ""
+                upload_buffer.append({
+                    "payload": (
+                        ph, fname, atype, fsize, producer, created_at,
+                        json.dumps(rec, ensure_ascii=False, default=str),
+                        make_thumb_bytes(img)
+                    ),
+                    "fname": fname,
+                    "producer": producer,
+                    "src_tag": src_tag,
+                    "phash": ph,
+                })
                 if len(upload_buffer) >= upload_batch:
                     flush_assets()
-                src_tag = "（保留原元数据）" if existing_meta.get('producer') else ""
-                gui_log(f"✅ 已登记: {fname}  作者:{producer}{src_tag}  phash:{ph}")
                 # 报告进度
                 progress_percent = int((idx + 1) / total * 100)
                 self.report_progress(progress_percent)
             flush_assets()
-            return {}
-        self._bg(task, msg="素材登记")
+            emit_stats()
+            return {"total": total, "success": success, "failed": failed}
+        self._bg(
+            task,
+            msg="素材登记",
+            stats_cb=lambda s: self._set_ingest_status(
+                self._register_stats,
+                total=s.get("total", 0),
+                success=s.get("success", 0),
+                failed=s.get("failed", 0),
+            ),
+        )
 
     def _do_derive(self):
         src_fp = self._drop_src.file(); dst_fp = self._drop_dst.file()
